@@ -1,6 +1,6 @@
 from ..utils import adjacent
 from . import utils
-from .monster_utils import WEAK_MONSTERS, ONLY_RANGED_SLOW_MONSTERS, consider_melee_only_ranged_if_hp_full, \
+from .monster_utils import WEAK_MONSTERS, is_only_ranged_slow, consider_melee_only_ranged_if_hp_full, \
     imminent_death_on_melee, EXPLODING_MONSTERS, WEIRD_MONSTERS
 
 
@@ -48,14 +48,14 @@ def draw_monster_priority_positive(agent, monster, priority, walkable):
         # weak monster - freely engage in melee
         _draw_around(priority, y, x, 2, radius=1, operation='max')
         _draw_around(priority, y, x, 1, radius=2, operation='max')
-    elif 'mold' in mon.mname and mon.mname not in ONLY_RANGED_SLOW_MONSTERS:
+    elif 'mold' in mon.mname and not is_only_ranged_slow(mon):
         if agent.blstats.hitpoints >= 15 or agent.blstats.hitpoints == agent.blstats.max_hitpoints:
             # freely engage in melee
             _draw_around(priority, y, x, 2, radius=1, operation='max')
             _draw_around(priority, y, x, 1, radius=2, operation='max')
         if len(agent.inventory.get_ranged_combinations()):
             _draw_ranged(priority, y, x, 1, walkable, radius=7, operation='max')
-    elif mon.mname in ONLY_RANGED_SLOW_MONSTERS:  # and agent.inventory.get_ranged_combinations():
+    elif is_only_ranged_slow(mon):  # and agent.inventory.get_ranged_combinations():
         if consider_melee_only_ranged_if_hp_full(agent, monster):
             _draw_around(priority, y, x, 2, radius=1, operation='max')
             _draw_around(priority, y, x, 1, radius=2, operation='max')
@@ -83,7 +83,7 @@ def draw_monster_priority_negative(agent, monster, priority, walkable):
     _, y, x, mon, _ = monster
 
     if imminent_death_on_melee(agent, monster) and not mon.mname in WEAK_MONSTERS \
-            and not mon.mname in ONLY_RANGED_SLOW_MONSTERS:
+            and not is_only_ranged_slow(mon):
         if mon.mmove <= 12:
             _draw_around(priority, y, x, -10, radius=1)
         else:
@@ -99,7 +99,7 @@ def draw_monster_priority_negative(agent, monster, priority, walkable):
             _draw_ranged(priority, y, x, -1, walkable, radius=7)
 
     # if agent.blstats.hitpoints <= 8 and not is_monster_faster(agent, monster) and not mon.mname in WEAK_MONSTERS \
-    #         and not mon.mname in ONLY_RANGED_SLOW_MONSTERS:
+    #         and not is_only_ranged_slow(mon):
     #     # stay out of melee range
     #     _draw_around(priority, y, x, -10, radius=1)
     #     if not len(agent.inventory.get_ranged_combinations()):
@@ -108,10 +108,10 @@ def draw_monster_priority_negative(agent, monster, priority, walkable):
 
     if mon.mname in EXPLODING_MONSTERS:
         _draw_around(priority, y, x, -10, radius=1)
-        if mon.mname not in ONLY_RANGED_SLOW_MONSTERS:
+        if not is_only_ranged_slow(mon):
             _draw_around(priority, y, x, -5, radius=2)
         _draw_ranged(priority, y, x, 4, walkable, radius=7)
-    elif 'mold' in mon.mname and mon.mname not in ONLY_RANGED_SLOW_MONSTERS:
+    elif 'mold' in mon.mname and not is_only_ranged_slow(mon):
         # prioritize staying in ranged weapons line of fire
         if len(agent.inventory.get_ranged_combinations()):
             _draw_ranged(priority, y, x, 2, walkable, radius=7)
@@ -121,7 +121,7 @@ def draw_monster_priority_negative(agent, monster, priority, walkable):
         # prioritize staying in ranged weapons line of fire
         if len(agent.inventory.get_ranged_combinations()):
             _draw_ranged(priority, y, x, 6, walkable, radius=7)
-    elif mon.mname in ONLY_RANGED_SLOW_MONSTERS:  # and agent.inventory.get_ranged_combinations():
+    elif is_only_ranged_slow(mon):  # and agent.inventory.get_ranged_combinations():
         # ignore
         pass
     elif 'unicorn' in mon.mname:

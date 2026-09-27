@@ -6,8 +6,9 @@ from scipy import signal
 
 from ..glyph import G, MON, Hunger
 from ..utils import adjacent
-from .monster_utils import is_monster_faster, is_dangerous_monster, \
-    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
+from . import monster_profile, rules_config as cfg
+from .monster_utils import is_monster_faster, is_dangerous_monster, is_only_ranged_slow, imminent_death_on_melee, \
+    EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
 
@@ -15,7 +16,11 @@ from .utils import wielding_ranged_weapon, line_dis_from, inside
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
+    if cfg.THREAT:
+        healthy = not imminent_death_on_melee(agent, monster)
+    else:
+        healthy = agent.blstats.hitpoints > 8
+    if healthy or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
@@ -25,7 +30,7 @@ def melee_monster_priority(agent, monsters, monster):
         ret += 1
     # if not wielding_melee_weapon(agent):
     #     ret -= 5
-    if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
+    if is_only_ranged_slow(mon):
         if not consider_melee_only_ranged_if_hp_full(agent, monster):
             ret -= 100
             if mon.mname == 'floating eye':
@@ -54,7 +59,7 @@ def ranged_priority(agent, dy, dx, monsters):
     for monster in monsters:
         _, my, mx, mon, _ = monster
         assert my != agent.blstats.y or mx != agent.blstats.x
-        if mon.mname not in WEAK_MONSTERS + ONLY_RANGED_SLOW_MONSTERS:
+        if mon.mname not in WEAK_MONSTERS and not is_only_ranged_slow(mon):
             closest_mon_dis = min(closest_mon_dis, line_dis_from(agent, my, mx))
 
     if closest_mon_dis == 1:
@@ -212,10 +217,13 @@ def elbereth_action(agent, monsters):
     adj_monsters_count = 0
     for monster in monsters:
         _, my, mx, mon, _ = monster
-        if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
+        if is_only_ranged_slow(mon):
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
+        if cfg.ELBERETH and not monster_profile.respects_elbereth(mon):
+            # onscary() never scares it: it keeps hitting through the engraving, so the turn is wasted
+            return []
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
@@ -272,7 +280,7 @@ def get_available_actions(agent, monsters):
                 pri, y, x, monster = ranged_pr
                 if agent.inventory.engraving_below_me.lower() == 'elbereth':
                     pri -= 100
-                if all(monster[3].mname in ONLY_RANGED_SLOW_MONSTERS for monster in monsters):
+                if all(is_only_ranged_slow(monster[3]) for monster in monsters):
                     pri += 10
                 actions.append((pri, ('ranged', dy, dx)))
 

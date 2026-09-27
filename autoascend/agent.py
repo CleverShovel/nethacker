@@ -1004,7 +1004,7 @@ class Agent:
 
         for my, mx in list(zip(*np.nonzero(utils.isin(self.glyphs, G.MONS)))):
             mon = MON.permonst(self.glyphs[my][mx])
-            if mon.mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS:
+            if combat.monster_utils.is_only_ranged_slow(mon):
                 walkable[my, mx] = False
 
         dis = utils.bfs(y, x,
@@ -1158,7 +1158,7 @@ class Agent:
         while 1:
             monsters = self.get_visible_monsters()
             allow_attack_all = self._last_turn - self._allow_attack_all_turn < 3
-            only_ranged_slow_monsters = all([monster[3].mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
+            only_ranged_slow_monsters = all([combat.monster_utils.is_only_ranged_slow(monster[3])
                                              and not combat.monster_utils.consider_melee_only_ranged_if_hp_full(self,
                                                                                                                 monster)
                                              for monster in monsters])
@@ -1610,31 +1610,6 @@ class Agent:
                 self.search(5)
                 return
 
-        # hypothesis: the two worst runs in the baseline both die the same way -- a small mimic,
-        # already identified (it hit us or we hit it, so it is no longer disguised), grinds a
-        # mid-HP character down in ordinary melee (mimics get up to 3 attacks/turn, so a single bad
-        # turn costs a third of max HP) while every existing safety net stays silent: the potion
-        # check needs a healing potion we do not carry, and both the prayer and last-resort-Elbereth
-        # thresholds only trigger below max/5-ish HP, well under the max/3-ish band these fights
-        # actually stall in. A mimic is not human/elf/minotaur, so it still respects Elbereth once
-        # revealed. React only to an actual ongoing losing exchange with this one specific, rare,
-        # already-identified threat (HP just dropped this turn while it is adjacent), not merely to
-        # "HP happens to be under half near a mimic" -- so a mimic fight we are winning, or one at
-        # a HP dip from something unrelated, is left alone, and the vastly more common non-mimic
-        # fights are untouched.
-        mimic_adjacent = any('mimic' in m[3].mname for m in self.get_visible_monsters()
-                              if max(abs(m[1] - self.blstats.y), abs(m[2] - self.blstats.x)) <= 1)
-        if mimic_adjacent:
-            prev_hp = getattr(self, '_mimic_fight_prev_hp', None)
-            self._mimic_fight_prev_hp = self.blstats.hitpoints
-            if (prev_hp is not None and self.blstats.hitpoints < prev_hp and
-                    self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave()):
-                yield True
-                self.engrave('Elbereth')
-                return
-        else:
-            self._mimic_fight_prev_hp = None
-
         # standing on a down staircase at crisis HP with prayer spent: take it. Only adjacent
         # monsters follow, the new level is a fresh start, and the depth is banked either way.
         if (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints or self.blstats.hitpoints < 8) and \
@@ -1706,7 +1681,7 @@ class Agent:
         near_threats = 0
         for dist, my, mx, mon, glyph in self.get_visible_monsters():
             if dist <= 4 and mon.mname not in combat.monster_utils.WEAK_MONSTERS \
-                    and mon.mname not in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS \
+                    and not combat.monster_utils.is_only_ranged_slow(mon) \
                     and (getattr(mon, 'mlevel', 0) >= 2
                          or combat.monster_utils.is_monster_faster(self, (dist, my, mx, mon, glyph))):
                 near_threats += 1
@@ -1714,7 +1689,7 @@ class Agent:
         best = None
         for dist, my, mx, mon, glyph in self.get_visible_monsters():
             if mon.mname in combat.monster_utils.WEAK_MONSTERS or \
-                    mon.mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS:
+                    combat.monster_utils.is_only_ranged_slow(mon):
                 continue
             mlevel = getattr(mon, 'mlevel', 0)
             faster = combat.monster_utils.is_monster_faster(self, (dist, my, mx, mon, glyph))
@@ -1920,6 +1895,8 @@ class Agent:
 
     @staticmethod
     def _respects_elbereth(mon):
+        if combat.rules_config.ELBERETH:
+            return combat.monster_profile.respects_elbereth(mon)
         # @ (humans and elves) and minotaurs ignore Elbereth; so may whatever we cannot see
         return mon.mname not in ('unknown', 'minotaur') and ord(mon.mlet) != MON.S_HUMAN
 

@@ -1,5 +1,7 @@
 import contextlib
+import os
 import re
+import sys
 from functools import partial
 from itertools import chain
 
@@ -10,11 +12,30 @@ from nle.nethack import actions as A
 from autoascend import objects as O, utils
 from autoascend.character import Character
 from autoascend.exceptions import AgentPanic
-from autoascend.glyph import G, MON
+from autoascend.glyph import G, MON, Hunger
 from autoascend.item import ItemManager, Item, ContainerContent, check_if_triggered_container_trap, \
     find_equivalent_item, flatten_items
+from autoascend.item import ring_amulet_config as ra_cfg
 from autoascend.item.inventory_items import InventoryItems
 from autoascend.strategy import Strategy
+
+# objects/data.py RING()/AMULET() name fields (bare for rings, "amulet of "-prefixed for amulets --
+# NetHack's own objects.c naming convention). Ring_on()/Amulet_on() (do_wear.c) apply these purely
+# by modifying combat resolution (to-hit, damage, AC, reflecting a reflectable attack); none of
+# them do anything between fights, unlike a resistance or sustain ability -- see
+# wear_combat_only_rings_amulets() in Inventory.
+_COMBAT_ONLY_RING_NAMES = ('increase accuracy', 'increase damage', 'protection')
+_COMBAT_ONLY_AMULET_NAMES = ('amulet of reflection',)
+
+
+def _is_combat_only_item(item):
+    if not item.is_unambiguous() or item.status == Item.CURSED:
+        return False
+    if item.category == nh.RING_CLASS:
+        return item.object.name in _COMBAT_ONLY_RING_NAMES
+    if item.category == nh.AMULET_CLASS:
+        return item.object.name in _COMBAT_ONLY_AMULET_NAMES
+    return False
 
 
 class Inventory:
@@ -41,6 +62,13 @@ class Inventory:
         self.item_manager = ItemManager(self.agent)
         self.items = InventoryItems(self.agent)
         self._unopenable_containers = set()  # (level key, y, x) of containers our hands can't handle
+        # instrumentation only (see stats_logger): dedup so repeated sightings/pickups of the same
+        # glyph in one episode aren't double-counted
+        self._seen_ring_amulet_glyphs = set()
+        self._picked_up_ring_amulet_glyphs = set()
+        self._last_hostile_near_turn = None  # for wear_combat_only_rings_amulets's DISENGAGE_COOLDOWN
+        self._shed_for_hunger = set()  # item.text of rings/amulets shed_rings_amulets_when_hungry removed
+        self._known_stuck_ring_amulet_glyphs = set()  # a #remove that failed once (cursed); see _try_remove
 
         self._previous_blstats = None
         self.items_below_me = None
@@ -438,6 +466,92 @@ class Inventory:
             yield ' '
         assert not items
 
+    def _log_ring_amulet_sightings(self, items):
+        # instrumentation only, no behavior change: measures how often rings/amulets actually
+        # appear in our runs (see plan: ring/amulet strategy) -- previously unmeasured.
+        for it in items:
+            if it.category not in (nh.RING_CLASS, nh.AMULET_CLASS):
+                continue
+            glyph = it.glyphs[0]
+            if glyph in self._seen_ring_amulet_glyphs:
+                continue
+            self._seen_ring_amulet_glyphs.add(glyph)
+            kind = 'ring' if it.category == nh.RING_CLASS else 'amulet'
+            self.agent.stats_logger.log_event(f'{kind}_seen_on_ground')
+            self.agent.stats_logger.log_min_value('first_ring_or_amulet_depth', self.agent.blstats.depth)
+            print(f'RINGSTAT pid={os.getpid()} seen_on_ground kind={kind} depth={self.agent.blstats.depth}',
+                  file=sys.stderr, flush=True)
+
+    def _log_ring_amulet_pickups(self, items):
+        for it in items:
+            if it.category not in (nh.RING_CLASS, nh.AMULET_CLASS):
+                continue
+            glyph = it.glyphs[0]
+            if glyph in self._picked_up_ring_amulet_glyphs:
+                continue
+            self._picked_up_ring_amulet_glyphs.add(glyph)
+            kind = 'ring' if it.category == nh.RING_CLASS else 'amulet'
+            self.agent.stats_logger.log_event(f'{kind}_pickup')
+            print(f'RINGSTAT pid={os.getpid()} pickup kind={kind} depth={self.agent.blstats.depth}',
+                  file=sys.stderr, flush=True)
+
+    def put_on(self, item, finger='l'):
+        """#puton a ring or amulet (armor uses wear() instead -- different NetHack command).
+        finger picks 'l'/'r' when both ring slots are free and NetHack asks which one."""
+        assert item is not None and item.category in (nh.RING_CLASS, nh.AMULET_CLASS), item
+        letter = self.items.get_letter(item)
+
+        def gen():
+            if 'What do you want to put on?' not in self.agent.single_message:
+                return
+            yield letter
+            if 'Which ring-finger' in self.agent.single_message:
+                yield finger
+
+        with self.agent.atom_operation():
+            self.agent.step(A.Command.PUTON, gen())
+
+        return 'You put' in self.agent.message or 'You are now wearing' in self.agent.message \
+            or 'constricts your throat' in self.agent.message or 'suddenly very' in self.agent.message \
+            or "don't feel like yourself" in self.agent.message
+
+    def remove_ring_or_amulet(self, item):
+        """#remove a worn ring or amulet. Returns False (item stays worn) if it's stuck-cursed,
+        matching takeoff()'s handling of a cursed piece of armor.
+
+        Like takeoff()'s own handling of a single equipped armor slot: when this is the ONLY
+        equipped ring/amulet, #remove auto-selects it and never asks "What do you want to
+        remove?" -- waiting for that prompt in that case would type the letter into nothing and
+        silently fail to remove the item (verified the hard way: this exact bug let a strangling
+        amulet of strangulation run its course instead of being taken off -- see git history)."""
+        assert item is not None and item.equipped and item.category in (nh.RING_CLASS, nh.AMULET_CLASS), item
+        letter = self.items.get_letter(item)
+        equipped_ring_amulet = [i for i in self.items
+                                 if i.category in (nh.RING_CLASS, nh.AMULET_CLASS) and i.equipped]
+
+        with self.agent.atom_operation():
+            self.agent.step(A.Command.REMOVE)
+            if len(equipped_ring_amulet) > 1:
+                if 'What do you want to remove?' not in self.agent.message:
+                    raise AgentPanic('env did not ask for the item to remove')
+                self.agent.type_text(letter)
+
+        if 'cursed' in self.agent.message:
+            return False
+        return True
+
+    def _try_remove(self, item):
+        """remove_ring_or_amulet(), remembering a cursed-stuck item so callers stop retrying it
+        every tick -- each failed #remove costs a step with no game turn (NetHack rejects it
+        outright), so retrying forever stalls the episode on the harness's no-progress timeout
+        instead of a death; this was found from exactly that failure mode, alongside the
+        strangulation bug identify_amulet_by_wear's docstring describes."""
+        if self.remove_ring_or_amulet(item):
+            self._known_stuck_ring_amulet_glyphs.discard(item.glyphs[0])
+            return True
+        self._known_stuck_ring_amulet_glyphs.add(item.glyphs[0])
+        return False
+
     def get_items_below_me(self, assume_appropriate_message=False):
         with self.agent.panic_if_position_changes():
             with self.agent.atom_operation():
@@ -514,6 +628,7 @@ class Inventory:
 
                 self.items_below_me = items
                 self.letters_below_me = letters
+                self._log_ring_amulet_sightings(items)
                 return items
 
     def pickup(self, items, counts=None):
@@ -560,6 +675,7 @@ class Inventory:
         if one_item and drop_count:
             self.drop(self.items.all_items[self.items.all_letters.index(letter)], drop_count, smart=False)
 
+        self._log_ring_amulet_pickups([i for i, c in zip(items, counts) if c > 0])
         self.get_items_below_me()
 
         return True
@@ -838,6 +954,9 @@ class Inventory:
             self.pickup_and_drop_items()
                 .before(self.check_containers())
                 .before(self.wear_best_stuff())
+                .before(self.identify_amulet_by_wear())
+                .before(self.wear_combat_only_rings_amulets())
+                .before(self.shed_rings_amulets_when_hungry())
                 .before(self.wand_engrave_identify())
                 .before(self.go_to_unchecked_containers())
                 .before(self.check_items()
@@ -1215,6 +1334,150 @@ class Inventory:
 
         if not yielded:
             yield False
+
+    def _hostile_within(self, radius):
+        return any(dist <= radius for dist, *_ in self.agent.get_visible_monsters())
+
+    @utils.debug_log('inventory.identify_amulet_by_wear')
+    @Strategy.wrap
+    def identify_amulet_by_wear(self):
+        """Try an unidentified amulet on to find out what it is. do_wear.c: strangulation gives an
+        immediate "It constricts your throat!" that we react to by removing the amulet at once
+        (Amulet_off() cancels the death countdown on removal); restful sleep gives no such
+        message, so we can't react to it -- instead we simply take the amulet back off next tick
+        regardless of outcome, since a single trial can't otherwise tell us what we're wearing.
+
+        The reactive removal is NOT a guaranteed save by itself: mkobj.c curses amulets of
+        strangulation/restful sleep/change about 90% of the time, and NetHack refuses to #remove
+        a cursed worn item at all ("You can't.  It is cursed.") -- confirmed the hard way, this
+        silently left the countdown running and killed the character several times before this
+        prayer fallback was added. is_safe_to_pray() is required up front so a stuck cursed
+        strangulation amulet always has an escape: NetHack's pray.c treats an active strangulation
+        as major trouble and has the god remove it, the same rescue a human player would use."""
+        if not ra_cfg.AMULET_IDENTIFY_BY_WEAR:
+            yield False
+        prop = self.agent.character.prop
+        if prop.blind or prop.confusion or prop.stun or prop.hallu:
+            yield False
+        if self.agent.blstats.hitpoints < ra_cfg.AMULET_WEAR_MIN_HP_FRAC * self.agent.blstats.max_hitpoints:
+            yield False
+        if self._hostile_within(ra_cfg.AMULET_WEAR_SAFE_RADIUS):
+            yield False
+        if not self.agent.is_safe_to_pray():
+            yield False
+
+        # "unidentified" means TYPE unknown (several objs still possible), not BUC status: a never-
+        # examined item's status defaults to an optimistic UNCURSED guess (item_manager.py), it is
+        # never left at Item.UNKNOWN, so checking status here would never match anything real.
+        worn_unknown = next((i for i in self.items if i.category == nh.AMULET_CLASS and i.equipped
+                              and not i.is_unambiguous()
+                              and i.glyphs[0] not in self._known_stuck_ring_amulet_glyphs), None)
+        if worn_unknown is not None:
+            # already mid-trial from a previous tick: take it off again, trial over
+            yield True
+            if not self._try_remove(worn_unknown) and self.agent.is_safe_to_pray():
+                self.agent.pray()
+            return
+
+        candidate = next((i for i in self.items if i.category == nh.AMULET_CLASS and not i.equipped
+                           and not i.is_unambiguous()
+                           and i.glyphs[0] not in self._known_stuck_ring_amulet_glyphs), None)
+        if candidate is None:
+            yield False
+
+        yield True
+        self.put_on(candidate)
+        if 'constricts your throat' in self.agent.message:
+            self.items.update(force=True)
+            worn = next((i for i in self.items if i.category == nh.AMULET_CLASS and i.equipped), None)
+            if worn is not None and not self._try_remove(worn) and self.agent.is_safe_to_pray():
+                self.agent.pray()
+
+    @utils.debug_log('inventory.wear_combat_only_rings_amulets')
+    @Strategy.wrap
+    def wear_combat_only_rings_amulets(self):
+        """Some identified rings/amulets only affect combat resolution (accuracy, damage, AC,
+        reflection): Ring_on()/Amulet_on() (do_wear.c) apply them with no benefit at all between
+        fights, yet they still cost nutrition every turn worn (eat.c gethungry()). Wear them only
+        while a hostile is within ENGAGE_RADIUS; take them off DISENGAGE_COOLDOWN turns after the
+        last one leaves, so a monster hovering at the edge doesn't flip this every turn."""
+        if not ra_cfg.COMBAT_ONLY_WEAR:
+            yield False
+
+        combat_only = [i for i in self.items if _is_combat_only_item(i)]
+        if not combat_only:
+            yield False
+
+        hostile_near = self._hostile_within(ra_cfg.ENGAGE_RADIUS)
+        if hostile_near:
+            self._last_hostile_near_turn = self.agent.blstats.time
+
+        if hostile_near:
+            candidate = next((i for i in combat_only if not i.equipped), None)
+            if candidate is not None:
+                yield True
+                self.put_on(candidate)
+                return
+        else:
+            since = self.agent.blstats.time - (self._last_hostile_near_turn
+                                                 if self._last_hostile_near_turn is not None else -10 ** 9)
+            if since >= ra_cfg.DISENGAGE_COOLDOWN:
+                worn = next((i for i in combat_only if i.equipped
+                              and i.glyphs[0] not in self._known_stuck_ring_amulet_glyphs), None)
+                if worn is not None:
+                    yield True
+                    self._try_remove(worn)
+                    return
+
+        yield False
+
+    @utils.debug_log('inventory.shed_rings_amulets_when_hungry')
+    @Strategy.wrap
+    def shed_rings_amulets_when_hungry(self):
+        """eat.c gethungry(): each worn ring costs 1 nutrition/20 turns unless +0 and a "charged"
+        type, each worn amulet 1/20 unconditionally. Not worth reacting to except when nutrition is
+        already the binding constraint: at Hungry or worse, take off rings/amulets we don't already
+        have a specific reason to keep on (unidentified ones cost us nothing we know we need; a
+        known amulet of life saving and anything already managed by wear_combat_only_rings_amulets
+        are left alone), and put them back on once fed again."""
+        if not ra_cfg.NUTRITION_REMOVE:
+            yield False
+
+        hungry = self.agent.blstats.hunger_state >= Hunger.HUNGRY
+        life_saving = O.from_name('amulet of life saving', nh.AMULET_CLASS)
+
+        if hungry:
+            def sheddable(i):
+                if i.category not in (nh.RING_CLASS, nh.AMULET_CLASS) or not i.equipped:
+                    return False
+                if i.status == Item.CURSED:
+                    return False
+                if i.glyphs[0] in self._known_stuck_ring_amulet_glyphs:
+                    return False
+                if i.is_unambiguous() and i.object == life_saving:
+                    return False
+                if _is_combat_only_item(i):
+                    return False
+                return True
+
+            candidate = next((i for i in self.items if sheddable(i)), None)
+            if candidate is not None:
+                yield True
+                if self._try_remove(candidate):
+                    self._shed_for_hunger.add(candidate.text)
+                return
+        else:
+            if self._shed_for_hunger:
+                text = next(iter(self._shed_for_hunger))
+                candidate = next((i for i in self.items if not i.equipped and i.text == text), None)
+                if candidate is not None:
+                    yield True
+                    self.put_on(candidate)
+                    self._shed_for_hunger.discard(text)
+                    return
+                self._shed_for_hunger.discard(text)
+
+        yield False
 
     @utils.debug_log('inventory.check_items')
     @Strategy.wrap

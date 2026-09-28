@@ -63,7 +63,8 @@ class Item:
                 (isinstance(self.objs[0], (O.Weapon, O.WepTool)) and self.status == Item.CURSED and self.equipped) or
                 (isinstance(self.objs[0], O.Armor) and self.equipped) or
                 (self.is_unambiguous() and self.object == O.from_name('loadstone') and self.status == Item.CURSED) or
-                (self.category == nh.BALL_CLASS and self.equipped)
+                (self.category == nh.BALL_CLASS and self.equipped) or
+                (self.category in (nh.RING_CLASS, nh.AMULET_CLASS) and self.equipped)
         )
 
     def weight(self, with_content=True):

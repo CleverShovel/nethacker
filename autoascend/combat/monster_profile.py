@@ -26,6 +26,16 @@ _PASSIVE_FATAL = ('AD_PLYS', 'AD_STON')
 # a passive attack this costly (expected HP per melee hit) makes a slow monster ranged-only
 PASSIVE_HAZARD_DAMAGE = 8
 
+# uhitm.c attack types that hit from a distance instead of on contact: breath (dragons, hell
+# hounds, nagas, Ixoth, Nazgul), spit (cobras, black naga, Juiblex) and gaze (Medusa's stoning,
+# Archon's blinding, the umber hulk's confusion, the pyrolisk's fire). None of these need the
+# monster to be, or stay, adjacent, so a monster that onscary() scares off can still use one --
+# an Elbereth doesn't stop it, only melee. (github.com/vkurenkov/nethacker@ef6acf87e265f74600b
+#914060f620d06117070a3 found this the hard way: a dive rested on Elbereth at Dlvl 25 next to a
+# yellow dragon and died to its acid breath; this table is our own read of monst.c's attack
+# types, not their code, but their trace is what sent us looking for it.)
+_RANGED_ATTACK_TYPES = ('AT_BREA', 'AT_SPIT', 'AT_GAZE')
+
 
 def _key(mon):
     name = mon.mname
@@ -49,16 +59,25 @@ def _alignment(mon):
     return r[3] if r else 0
 
 
+def has_ranged_attack(mon):
+    r = row(mon)
+    return r is not None and any(a[0] in _RANGED_ATTACK_TYPES for a in r[4])
+
+
 def respects_elbereth(mon):
-    """False for who ignores a written Elbereth in 3.6.6 (monmove.c onscary): humans and elves
-    (class @), minotaurs, the Riders, the Wizard, Angels and every other lawful minion
-    (Aleax, couatl, ki-rin, Archon), shopkeepers/guards/priests (all @). Blind and peaceful
-    monsters ignore it too, but the bot cannot see either; peaceful ones are never attacked."""
+    """False for who won't be scared off, or who can still hurt us even scared, by an Elbereth
+    engraved in 3.6.6 (monmove.c onscary(), plus has_ranged_attack() above): humans and elves
+    (class @), minotaurs, the Riders, the Wizard, Angels and every other lawful minion (Aleax,
+    couatl, ki-rin, Archon -- though Archon's gaze bypasses this anyway), shopkeepers/guards/
+    priests (all @), and anything that breathes, spits or gazes. Blind and peaceful monsters
+    ignore it too, but the bot cannot see either; peaceful ones are never attacked."""
     if mon.mname in ('unknown', 'minotaur', 'Wizard of Yendor', 'Angel') or mon.mname in RIDERS:
         return False
     if ord(mon.mlet) == MON.S_HUMAN:
         return False
     if mon.mflags2 & MON.M2_MINION and _alignment(mon) > 0:
+        return False
+    if cfg.ELBERETH_RANGED and has_ranged_attack(mon):
         return False
     return True
 
@@ -89,10 +108,20 @@ def passive_damage(mon):
 
 
 def is_passive_hazard(mon):
-    """Slow or sessile monsters (molds, jellies, blobs, floating eye) that hurt a lot when hit:
-    fight them from a distance or not at all, and walk around them."""
+    """Slow or sessile monsters that hurt when hit: fight them from a distance or not at all, and
+    walk around them. A monster with mmove 0 (molds, most jellies) never gets to us on its own, so
+    any passive attack it has is a reason to leave it alone, however small the damage looks from
+    one hit -- green/red/yellow mold's ~5 expected HP missed our own damage cutoff below, but
+    github.com/vkurenkov/nethacker@ef6acf87e265f74600b914060f620d06117070a3 found them worth
+    avoiding too, from real deaths early at Dlvl 1 (its jf_config.py's LATE_FIXES); mmove == 0
+    catches them (and the rest of monst.c's sessile fungi/jellies) without needing a name list or
+    a damage number. A slow-but-mobile monster (mmove 1-3: floating eye, spotted/ochre jelly, the
+    Oracle) still needs the damage cutoff, since most of monst.c's mmove-1-3 monsters have no
+    passive worth avoiding at all."""
     if not cfg.PASSIVE:
         return False
+    if mon.mmove == 0 and cfg.PASSIVE_SESSILE_ANY:
+        return passive_attack(mon) is not None
     return mon.mmove <= 3 and passive_damage(mon) >= PASSIVE_HAZARD_DAMAGE
 
 

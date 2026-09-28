@@ -1,3 +1,5 @@
+import os
+import sys
 from enum import IntEnum, auto
 
 import nle.nethack as nh
@@ -10,7 +12,7 @@ from . import utils
 from .character import Character
 from .exceptions import AgentPanic
 from .glyph import Hunger, G, MON
-from .item import Item, flatten_items
+from .item import Item, flatten_items, find_equivalent_item
 from .item.item_priority_base import ItemPriorityBase
 from .level import Level
 from .strategy import Strategy
@@ -423,8 +425,20 @@ class GlobalLogic:
 
         # TODO: move chunking to inventory.drop
         items_to_drop = items_to_drop[:self.agent.inventory.items.free_slots()]
+        ring_amulet_dropped = [item for item in items_to_drop
+                                if item.category in (nh.RING_CLASS, nh.AMULET_CLASS)]
 
         self.agent.inventory.drop(items_to_drop)
+
+        # instrumentation only, no behavior change: did the altar BUC-test actually reveal a
+        # ring/amulet's curse status (previously unmeasured -- see plan: ring/amulet strategy)
+        for item in ring_amulet_dropped:
+            refreshed = find_equivalent_item(item, self.agent.inventory.items_below_me)
+            if refreshed is not None and refreshed.status != Item.UNKNOWN:
+                kind = 'ring' if item.category == nh.RING_CLASS else 'amulet'
+                self.agent.stats_logger.log_event(f'{kind}_curse_revealed')
+                print(f'RINGSTAT pid={os.getpid()} curse_revealed kind={kind} status={refreshed.status}',
+                      file=sys.stderr, flush=True)
 
     @utils.debug_log('dip_for_excalibur')
     @Strategy.wrap

@@ -1,7 +1,5 @@
 import contextlib
-import os
 import re
-import sys
 from functools import partial
 from itertools import chain
 
@@ -10,32 +8,15 @@ import numpy as np
 from nle.nethack import actions as A
 
 from autoascend import objects as O, utils
+from autoascend import power
 from autoascend.character import Character
 from autoascend.exceptions import AgentPanic
 from autoascend.glyph import G, MON, Hunger
+from autoascend import jf_config
 from autoascend.item import ItemManager, Item, ContainerContent, check_if_triggered_container_trap, \
     find_equivalent_item, flatten_items
-from autoascend.item import ring_amulet_config as ra_cfg
 from autoascend.item.inventory_items import InventoryItems
 from autoascend.strategy import Strategy
-
-# objects/data.py RING()/AMULET() name fields (bare for rings, "amulet of "-prefixed for amulets --
-# NetHack's own objects.c naming convention). Ring_on()/Amulet_on() (do_wear.c) apply these purely
-# by modifying combat resolution (to-hit, damage, AC, reflecting a reflectable attack); none of
-# them do anything between fights, unlike a resistance or sustain ability -- see
-# wear_combat_only_rings_amulets() in Inventory.
-_COMBAT_ONLY_RING_NAMES = ('increase accuracy', 'increase damage', 'protection')
-_COMBAT_ONLY_AMULET_NAMES = ('amulet of reflection',)
-
-
-def _is_combat_only_item(item):
-    if not item.is_unambiguous() or item.status == Item.CURSED:
-        return False
-    if item.category == nh.RING_CLASS:
-        return item.object.name in _COMBAT_ONLY_RING_NAMES
-    if item.category == nh.AMULET_CLASS:
-        return item.object.name in _COMBAT_ONLY_AMULET_NAMES
-    return False
 
 
 class Inventory:
@@ -61,14 +42,6 @@ class Inventory:
         self.agent = agent
         self.item_manager = ItemManager(self.agent)
         self.items = InventoryItems(self.agent)
-        self._unopenable_containers = set()  # (level key, y, x) of containers our hands can't handle
-        # instrumentation only (see stats_logger): dedup so repeated sightings/pickups of the same
-        # glyph in one episode aren't double-counted
-        self._seen_ring_amulet_glyphs = set()
-        self._picked_up_ring_amulet_glyphs = set()
-        self._last_hostile_near_turn = None  # for wear_combat_only_rings_amulets's DISENGAGE_COOLDOWN
-        self._shed_for_hunger = set()  # item.text of rings/amulets shed_rings_amulets_when_hungry removed
-        self._known_stuck_ring_amulet_glyphs = set()  # a #remove that failed once (cursed); see _try_remove
 
         self._previous_blstats = None
         self.items_below_me = None
@@ -76,6 +49,61 @@ class Inventory:
         self.engraving_below_me = None
 
         self.skip_engrave_counter = 0
+        self.scare_labels = set()     # scroll labels known to be scare monster in this game (power.note_dust_prompt)
+        self.dropped_scrolls = set()  # (level key, (y, x), appearance) of scrolls we dropped: never picked up again
+        self._sell_tested = set()     # (level key, glyph) already offered to this level's shopkeeper (SELL_PRICE_ID)
+        self.empty_wands = set()  # inventory texts of wands that answered "Nothing happens"
+        self.multi_container_squares = set()  # (dungeon, level, y, x) where #loot asks 'Loot which containers?'
+        self._container_failures = {}         # (dungeon, level, y, x) -> failed use_container attempts
+        self.unreachable_items_until = {}     # (dungeon, level, y, x) -> turn: items at a pit bottom out of reach
+
+    def is_known_empty(self, item):
+        return item.text in self.empty_wands
+
+    # ---- scare monster (jf_config.SCARE_KEEP, power.py): picked up a second time it turns to dust
+
+    @staticmethod
+    def _scroll_key(item):
+        """A scroll's appearance from its text ('labeled FOO', 'unlabeled', 'of teleportation')."""
+        text = item.text or ''
+        m = re.search(r'labeled ([A-Z0-9 ]+)', text)
+        if m:
+            return 'labeled ' + m.group(1).strip()
+        if 'unlabeled' in text:
+            return 'unlabeled'
+        m = re.search(r'scrolls? of ([a-z ]+)', text)
+        return 'of ' + m.group(1).strip() if m else text
+
+    def _droppable(self, item):
+        """arrange_items may drop it. With SCARE_KEEP a carried scroll that may be scare monster stays: a heavy
+        armour swap dropped all light loot and picked it up again (base-jf26 s14: 'The scroll turns to dust')."""
+        if not item.can_be_dropped_from_inventory():
+            return False
+        return not (power.keep_scroll(item) and item in self.items.all_items)
+
+    def dropped_here(self, item, pos=None):
+        """A scroll that may be scare monster which we dropped on this square: never pick it up again."""
+        if not jf_config.SCARE_KEEP or not power.is_scare_candidate(item):
+            return False
+        pos = pos if pos is not None else (self.agent.blstats.y, self.agent.blstats.x)
+        return (self.agent.current_level().key(), (int(pos[0]), int(pos[1])), self._scroll_key(item)) in \
+            self.dropped_scrolls
+
+    def _note_dropped(self, items, counts):
+        if not jf_config.SCARE_KEEP:
+            return
+        here = (self.agent.current_level().key(), (int(self.agent.blstats.y), int(self.agent.blstats.x)))
+        for item, count in zip(items, counts):
+            if count and power.is_scare_candidate(item):
+                self.dropped_scrolls.add(here + (self._scroll_key(item),))
+
+    def set_unknown_below_me(self):
+        """Stand-in when the square can't be parsed: pretend nothing useful is here."""
+        if self.items_below_me is None:
+            self.items_below_me = []
+            self.letters_below_me = []
+        if self.engraving_below_me is None:
+            self.engraving_below_me = ''
 
     def on_panic(self):
         self.items_below_me = None
@@ -240,6 +268,13 @@ class Inventory:
                 yield ' '
             assert 'You have no free hand.' not in self.agent.single_message, 'TODO: handle it'
             assert 'Do what with ' in self.agent.single_popup[0]
+            if items_to_take and any(' is empty' in line for line in self.agent.single_popup[:1] +
+                                     [self.agent.single_message]):
+                # our record of its contents is stale (the menu then has no 'take out' entry and the
+                # prompt loop asserted ~275 times in one run)
+                self.item_manager.container_contents.pop(container.container_id, None)
+                yield A.Command.ESC
+                raise AgentPanic('container is empty')
             if items_to_put and items_to_take:
                 yield 'r'
             elif items_to_put and not items_to_take:
@@ -271,6 +306,25 @@ class Inventory:
                         'Continue? [ynq] (q)' in self.agent.single_message:
                     yield 'y'
 
+        below = container in self.items_below_me and container not in self.items.all_items
+        try:
+            self._use_container_steps(container, gen)
+        except AgentPanic:
+            # CONTAINER_LOOP_FIX: a floor container whose take-out menu never matches our record ('no popup, but
+            # some items were not selected yet') was retried 45,453 times in one robustness guard game (457k steps,
+            # then the driver's hang guard). After 3 failures on a square, leave its containers alone.
+            if jf_config.CONTAINER_LOOP_FIX and below:
+                here = self._here()
+                self._container_failures[here] = self._container_failures.get(here, 0) + 1
+                if self._container_failures[here] >= 3:
+                    self.multi_container_squares.add(here)
+            raise
+
+        for item in chain(self.items.all_items, self.items_below_me):
+            if item.is_container() and item.container_id == container.container_id:
+                self.check_container_content(item)
+
+    def _use_container_steps(self, container, gen):
         with self.agent.atom_operation():
             # TODO: refactor: the same fragment is in check_container_content
             if container in self.items.all_items:
@@ -280,7 +334,7 @@ class Inventory:
             elif container in self.items_below_me:
                 self.agent.step(A.Command.LOOT)
                 while True:
-                    assert 'Loot which containers?' not in self.agent.popup, self.agent.popup
+                    self._escape_multi_container_menu()
                     assert 'Loot in what direction?' not in self.agent.message
                     if "You don't find anything here to loot." in self.agent.message:
                         raise AgentPanic('no container to loot')
@@ -300,9 +354,16 @@ class Inventory:
             else:
                 assert 0
 
-        for item in chain(self.items.all_items, self.items_below_me):
-            if item.is_container() and item.container_id == container.container_id:
-                self.check_container_content(item)
+    def _here(self):
+        return (*self.agent.current_level().key(), self.agent.blstats.y, self.agent.blstats.x)
+
+    def _escape_multi_container_menu(self):
+        """With several containers on the square #loot shows a 'Loot which containers?' menu that the
+        prompt loop doesn't handle (one game hit it ~2300 times, 100k wasted steps): leave it alone."""
+        if 'Loot which containers?' in self.agent.popup:
+            self.multi_container_squares.add(self._here())
+            self.agent.step(A.Command.ESC)
+            raise AgentPanic('several containers here')
 
     def check_container_content(self, item):
         assert item.is_possible_container() or item.is_container()
@@ -395,8 +456,11 @@ class Inventory:
                 self.agent.step(A.Command.LOOT)
                 while True:
                     if "You don't find anything here to loot." in self.agent.message:
+                        # a 'possible container' that isn't one: skip the square (a jf21 game retried the
+                        # #loot here until the turn-inactivity guard fired, 31 times)
+                        self.multi_container_squares.add(self._here())
                         raise AgentPanic('no container below me')
-                    assert 'Loot which containers?' not in self.agent.popup, self.agent.popup
+                    self._escape_multi_container_menu()
                     assert 'There is ' in self.agent.message and ', loot it?' in self.agent.message, self.agent.message
                     r = re.findall(r'There is ([a-zA-z0-9# ]+) here\, loot it\? \[ynq\] \(q\)', self.agent.message)
                     assert len(r) == 1, self.agent.message
@@ -465,92 +529,6 @@ class Inventory:
 
             yield ' '
         assert not items
-
-    def _log_ring_amulet_sightings(self, items):
-        # instrumentation only, no behavior change: measures how often rings/amulets actually
-        # appear in our runs (see plan: ring/amulet strategy) -- previously unmeasured.
-        for it in items:
-            if it.category not in (nh.RING_CLASS, nh.AMULET_CLASS):
-                continue
-            glyph = it.glyphs[0]
-            if glyph in self._seen_ring_amulet_glyphs:
-                continue
-            self._seen_ring_amulet_glyphs.add(glyph)
-            kind = 'ring' if it.category == nh.RING_CLASS else 'amulet'
-            self.agent.stats_logger.log_event(f'{kind}_seen_on_ground')
-            self.agent.stats_logger.log_min_value('first_ring_or_amulet_depth', self.agent.blstats.depth)
-            print(f'RINGSTAT pid={os.getpid()} seen_on_ground kind={kind} depth={self.agent.blstats.depth}',
-                  file=sys.stderr, flush=True)
-
-    def _log_ring_amulet_pickups(self, items):
-        for it in items:
-            if it.category not in (nh.RING_CLASS, nh.AMULET_CLASS):
-                continue
-            glyph = it.glyphs[0]
-            if glyph in self._picked_up_ring_amulet_glyphs:
-                continue
-            self._picked_up_ring_amulet_glyphs.add(glyph)
-            kind = 'ring' if it.category == nh.RING_CLASS else 'amulet'
-            self.agent.stats_logger.log_event(f'{kind}_pickup')
-            print(f'RINGSTAT pid={os.getpid()} pickup kind={kind} depth={self.agent.blstats.depth}',
-                  file=sys.stderr, flush=True)
-
-    def put_on(self, item, finger='l'):
-        """#puton a ring or amulet (armor uses wear() instead -- different NetHack command).
-        finger picks 'l'/'r' when both ring slots are free and NetHack asks which one."""
-        assert item is not None and item.category in (nh.RING_CLASS, nh.AMULET_CLASS), item
-        letter = self.items.get_letter(item)
-
-        def gen():
-            if 'What do you want to put on?' not in self.agent.single_message:
-                return
-            yield letter
-            if 'Which ring-finger' in self.agent.single_message:
-                yield finger
-
-        with self.agent.atom_operation():
-            self.agent.step(A.Command.PUTON, gen())
-
-        return 'You put' in self.agent.message or 'You are now wearing' in self.agent.message \
-            or 'constricts your throat' in self.agent.message or 'suddenly very' in self.agent.message \
-            or "don't feel like yourself" in self.agent.message
-
-    def remove_ring_or_amulet(self, item):
-        """#remove a worn ring or amulet. Returns False (item stays worn) if it's stuck-cursed,
-        matching takeoff()'s handling of a cursed piece of armor.
-
-        Like takeoff()'s own handling of a single equipped armor slot: when this is the ONLY
-        equipped ring/amulet, #remove auto-selects it and never asks "What do you want to
-        remove?" -- waiting for that prompt in that case would type the letter into nothing and
-        silently fail to remove the item (verified the hard way: this exact bug let a strangling
-        amulet of strangulation run its course instead of being taken off -- see git history)."""
-        assert item is not None and item.equipped and item.category in (nh.RING_CLASS, nh.AMULET_CLASS), item
-        letter = self.items.get_letter(item)
-        equipped_ring_amulet = [i for i in self.items
-                                 if i.category in (nh.RING_CLASS, nh.AMULET_CLASS) and i.equipped]
-
-        with self.agent.atom_operation():
-            self.agent.step(A.Command.REMOVE)
-            if len(equipped_ring_amulet) > 1:
-                if 'What do you want to remove?' not in self.agent.message:
-                    raise AgentPanic('env did not ask for the item to remove')
-                self.agent.type_text(letter)
-
-        if 'cursed' in self.agent.message:
-            return False
-        return True
-
-    def _try_remove(self, item):
-        """remove_ring_or_amulet(), remembering a cursed-stuck item so callers stop retrying it
-        every tick -- each failed #remove costs a step with no game turn (NetHack rejects it
-        outright), so retrying forever stalls the episode on the harness's no-progress timeout
-        instead of a death; this was found from exactly that failure mode, alongside the
-        strangulation bug identify_amulet_by_wear's docstring describes."""
-        if self.remove_ring_or_amulet(item):
-            self._known_stuck_ring_amulet_glyphs.discard(item.glyphs[0])
-            return True
-        self._known_stuck_ring_amulet_glyphs.add(item.glyphs[0])
-        return False
 
     def get_items_below_me(self, assume_appropriate_message=False):
         with self.agent.panic_if_position_changes():
@@ -628,7 +606,6 @@ class Inventory:
 
                 self.items_below_me = items
                 self.letters_below_me = letters
-                self._log_ring_amulet_sightings(items)
                 return items
 
     def pickup(self, items, counts=None):
@@ -667,6 +644,11 @@ class Inventory:
             while re.search('You have [a-z ]+ lifting ', self.agent.message) and \
                     'Continue?' in self.agent.message:
                 self.agent.type_text('y')
+            if 'You cannot reach the bottom of the pit' in self.agent.message:
+                # standing at a pit's edge: its items are out of reach until we are in it; the gatherer
+                # retried without the clock moving until the 'turn inactivity' guard fired (54 times)
+                self.unreachable_items_until[self._here()] = self.agent.blstats.time + 300
+                raise AgentPanic('items at the bottom of a pit are out of reach')
             if one_item and drop_count:
                 letter = re.search(r'([a-zA-Z$]) - ', self.agent.message)
                 assert letter is not None, self.agent.message
@@ -675,7 +657,6 @@ class Inventory:
         if one_item and drop_count:
             self.drop(self.items.all_items[self.items.all_letters.index(letter)], drop_count, smart=False)
 
-        self._log_ring_amulet_pickups([i for i, c in zip(items, counts) if c > 0])
         self.get_items_below_me()
 
         return True
@@ -726,6 +707,7 @@ class Inventory:
 
         with self.agent.atom_operation():
             self.agent.step(A.Command.DROPTYPE, key_gen())
+        self._note_dropped(items, counts)
         self.get_items_below_me()
 
         return True
@@ -901,7 +883,8 @@ class Inventory:
                             return_dps=False, allow_unknown_status=False, additional_ammo=[]):
         if items is None:
             items = self.items
-        items = flatten_items(items)
+        # never throw unpaid goods (you owe for them, and a shopkeeper kills a thief)
+        items = [i for i in flatten_items(items) if i.shop_status != Item.UNPAID]
 
         best_launcher, best_ammo = None, None
         best_dps = -float('inf')
@@ -925,6 +908,8 @@ class Inventory:
         for item in items:
             if not item.is_armor() or not item.is_unambiguous():
                 continue
+            if jf_config.KEEP_MAGIC_BOOTS and power.never_wear(item):
+                continue  # kept for the Castle; cursed levitation boots would end the dig-dive
 
             # TODO: consider other always allowed items than dragon hide
             is_dragonscale_armor = item.object.metal == O.DRAGON_HIDE
@@ -958,6 +943,8 @@ class Inventory:
                 .before(self.wear_combat_only_rings_amulets())
                 .before(self.shed_rings_amulets_when_hungry())
                 .before(self.wand_engrave_identify())
+                .before(self.use_spare_wishes())
+                .before(self.wear_life_saving())
                 .before(self.go_to_unchecked_containers())
                 .before(self.check_items()
                         .before(self.go_to_item_to_pickup()).repeat().every(5)
@@ -977,10 +964,16 @@ class Inventory:
             yield False
 
         while 1:
-            items_below_me = list(filter(lambda i: i.shop_status == Item.NOT_SHOP, flatten_items(self.items_below_me)))
-            forced_items = list(filter(lambda i: not i.can_be_dropped_from_inventory(), flatten_items(self.items)))
+            if jf_config.CONTAINER_LOOP_FIX and self._here() in self.multi_container_squares:
+                # containers here are left alone (their contents aren't ours to plan with)
+                below = list(self.items_below_me)
+            else:
+                below = flatten_items(self.items_below_me)
+            items_below_me = list(filter(lambda i: i.shop_status == Item.NOT_SHOP and not self.dropped_here(i),
+                                         below))
+            forced_items = list(filter(lambda i: not self._droppable(i), flatten_items(self.items)))
             assert all((item in self.items.all_items for item in forced_items))
-            free_items = list(filter(lambda i: i.can_be_dropped_from_inventory(),
+            free_items = list(filter(lambda i: self._droppable(i),
                                      flatten_items(sorted(self.items, key=lambda x: x.text))))
             all_items = free_items + items_below_me
 
@@ -1092,7 +1085,7 @@ class Inventory:
             f"This {wand_regex} is a wand of digging!": ['digging'],
             "Gravel flies up from the floor!": ['digging'],
             f"This {wand_regex} is a wand of fire!": ['fire'],
-            "Lightning arcs from the wand. You are blinded by the flash!": ['lighting'],
+            "Lightning arcs from the wand. You are blinded by the flash!": ['lightning'],
             f"This {wand_regex} is a wand of lightning!": ['lightning'],
             f"The {floor_regex} is riddled by bullet holes!": ['magic missile'],
             f'The engraving now reads:': ['polymorph'],
@@ -1149,7 +1142,7 @@ class Inventory:
             yield False  # TODO: only for handless monsters (which cannot write)
 
         self.skip_engrave_counter -= 1
-        if self.agent.character.prop.blind or self.skip_engrave_counter > 0:
+        if self.agent.character.prop.blind or self.skip_engrave_counter > 0 or self.agent.hands_welded():
             yield False
             return
         yielded = False
@@ -1193,6 +1186,51 @@ class Inventory:
 
         if not yielded:
             yield False
+
+    @utils.debug_log('inventory.use_spare_wishes')
+    @Strategy.wrap
+    def use_spare_wishes(self):
+        """SPARE_WISHES: a wand of wishing keeps rnd(3) - 1 charges after the engrave-test wish (51 of 3158 games
+        in our runs had one). Zap it until it's empty; power.wish_text picks the wish (the Castle passage ring,
+        then speed boots)."""
+        if not jf_config.SPARE_WISHES or self.agent.character.prop.polymorph or self.agent.hands_welded():
+            yield False
+            return
+        wand = next((i for i in self.items if i.is_unambiguous() and i.object == power.WISH_WAND and
+                     not power._empty(self.agent, i)), None)
+        if wand is None:
+            yield False
+            return
+        yield True
+        self.agent.log(f'POWER zapping {wand.text!r} for {power.wish_text(self.agent)!r}')
+        self.agent.zap(wand, None)
+        if 'Nothing happens' in self.agent.message:
+            self.empty_wands.add(wand.text)
+        self.items.update(force=True)
+
+    @utils.debug_log('inventory.wear_life_saving')
+    @Strategy.wrap
+    def wear_life_saving(self):
+        """SPARE_WISHES: put on a known amulet of life saving (a wish) when no amulet is worn."""
+        if not jf_config.SPARE_WISHES or self.agent.character.prop.polymorph or \
+                any(i.category == nh.AMULET_CLASS and i.equipped for i in self.items):
+            yield False
+            return
+        amulet = next((i for i in self.items if i.is_unambiguous() and i.object == power.LS_AMULET), None)
+        if amulet is None:
+            yield False
+            return
+        yield True
+        letter = self.items.get_letter(amulet)
+
+        def gen():
+            if 'What do you want to put on?' in self.agent.single_message:
+                yield letter
+
+        self.agent.log(f'POWER putting on {amulet.text!r}')
+        with self.agent.atom_operation():
+            self.agent.step(A.Command.PUTON, gen())
+        self.items.update(force=True)
 
     def _engrave_single_wand(self, item):
         """ Returns possible objects or None if current tile not suitable for identification."""
@@ -1292,6 +1330,9 @@ class Inventory:
     @utils.debug_log('inventory.wear_best_stuff')
     @Strategy.wrap
     def wear_best_stuff(self):
+        if self.agent.hands_welded():
+            yield False   # armor can't come off (or go on over it) with the hands welded
+            return
         yielded = False
         while 1:
             best_armorset = self.get_best_armorset()
@@ -1334,150 +1375,6 @@ class Inventory:
 
         if not yielded:
             yield False
-
-    def _hostile_within(self, radius):
-        return any(dist <= radius for dist, *_ in self.agent.get_visible_monsters())
-
-    @utils.debug_log('inventory.identify_amulet_by_wear')
-    @Strategy.wrap
-    def identify_amulet_by_wear(self):
-        """Try an unidentified amulet on to find out what it is. do_wear.c: strangulation gives an
-        immediate "It constricts your throat!" that we react to by removing the amulet at once
-        (Amulet_off() cancels the death countdown on removal); restful sleep gives no such
-        message, so we can't react to it -- instead we simply take the amulet back off next tick
-        regardless of outcome, since a single trial can't otherwise tell us what we're wearing.
-
-        The reactive removal is NOT a guaranteed save by itself: mkobj.c curses amulets of
-        strangulation/restful sleep/change about 90% of the time, and NetHack refuses to #remove
-        a cursed worn item at all ("You can't.  It is cursed.") -- confirmed the hard way, this
-        silently left the countdown running and killed the character several times before this
-        prayer fallback was added. is_safe_to_pray() is required up front so a stuck cursed
-        strangulation amulet always has an escape: NetHack's pray.c treats an active strangulation
-        as major trouble and has the god remove it, the same rescue a human player would use."""
-        if not ra_cfg.AMULET_IDENTIFY_BY_WEAR:
-            yield False
-        prop = self.agent.character.prop
-        if prop.blind or prop.confusion or prop.stun or prop.hallu:
-            yield False
-        if self.agent.blstats.hitpoints < ra_cfg.AMULET_WEAR_MIN_HP_FRAC * self.agent.blstats.max_hitpoints:
-            yield False
-        if self._hostile_within(ra_cfg.AMULET_WEAR_SAFE_RADIUS):
-            yield False
-        if not self.agent.is_safe_to_pray():
-            yield False
-
-        # "unidentified" means TYPE unknown (several objs still possible), not BUC status: a never-
-        # examined item's status defaults to an optimistic UNCURSED guess (item_manager.py), it is
-        # never left at Item.UNKNOWN, so checking status here would never match anything real.
-        worn_unknown = next((i for i in self.items if i.category == nh.AMULET_CLASS and i.equipped
-                              and not i.is_unambiguous()
-                              and i.glyphs[0] not in self._known_stuck_ring_amulet_glyphs), None)
-        if worn_unknown is not None:
-            # already mid-trial from a previous tick: take it off again, trial over
-            yield True
-            if not self._try_remove(worn_unknown) and self.agent.is_safe_to_pray():
-                self.agent.pray()
-            return
-
-        candidate = next((i for i in self.items if i.category == nh.AMULET_CLASS and not i.equipped
-                           and not i.is_unambiguous()
-                           and i.glyphs[0] not in self._known_stuck_ring_amulet_glyphs), None)
-        if candidate is None:
-            yield False
-
-        yield True
-        self.put_on(candidate)
-        if 'constricts your throat' in self.agent.message:
-            self.items.update(force=True)
-            worn = next((i for i in self.items if i.category == nh.AMULET_CLASS and i.equipped), None)
-            if worn is not None and not self._try_remove(worn) and self.agent.is_safe_to_pray():
-                self.agent.pray()
-
-    @utils.debug_log('inventory.wear_combat_only_rings_amulets')
-    @Strategy.wrap
-    def wear_combat_only_rings_amulets(self):
-        """Some identified rings/amulets only affect combat resolution (accuracy, damage, AC,
-        reflection): Ring_on()/Amulet_on() (do_wear.c) apply them with no benefit at all between
-        fights, yet they still cost nutrition every turn worn (eat.c gethungry()). Wear them only
-        while a hostile is within ENGAGE_RADIUS; take them off DISENGAGE_COOLDOWN turns after the
-        last one leaves, so a monster hovering at the edge doesn't flip this every turn."""
-        if not ra_cfg.COMBAT_ONLY_WEAR:
-            yield False
-
-        combat_only = [i for i in self.items if _is_combat_only_item(i)]
-        if not combat_only:
-            yield False
-
-        hostile_near = self._hostile_within(ra_cfg.ENGAGE_RADIUS)
-        if hostile_near:
-            self._last_hostile_near_turn = self.agent.blstats.time
-
-        if hostile_near:
-            candidate = next((i for i in combat_only if not i.equipped), None)
-            if candidate is not None:
-                yield True
-                self.put_on(candidate)
-                return
-        else:
-            since = self.agent.blstats.time - (self._last_hostile_near_turn
-                                                 if self._last_hostile_near_turn is not None else -10 ** 9)
-            if since >= ra_cfg.DISENGAGE_COOLDOWN:
-                worn = next((i for i in combat_only if i.equipped
-                              and i.glyphs[0] not in self._known_stuck_ring_amulet_glyphs), None)
-                if worn is not None:
-                    yield True
-                    self._try_remove(worn)
-                    return
-
-        yield False
-
-    @utils.debug_log('inventory.shed_rings_amulets_when_hungry')
-    @Strategy.wrap
-    def shed_rings_amulets_when_hungry(self):
-        """eat.c gethungry(): each worn ring costs 1 nutrition/20 turns unless +0 and a "charged"
-        type, each worn amulet 1/20 unconditionally. Not worth reacting to except when nutrition is
-        already the binding constraint: at Hungry or worse, take off rings/amulets we don't already
-        have a specific reason to keep on (unidentified ones cost us nothing we know we need; a
-        known amulet of life saving and anything already managed by wear_combat_only_rings_amulets
-        are left alone), and put them back on once fed again."""
-        if not ra_cfg.NUTRITION_REMOVE:
-            yield False
-
-        hungry = self.agent.blstats.hunger_state >= Hunger.HUNGRY
-        life_saving = O.from_name('amulet of life saving', nh.AMULET_CLASS)
-
-        if hungry:
-            def sheddable(i):
-                if i.category not in (nh.RING_CLASS, nh.AMULET_CLASS) or not i.equipped:
-                    return False
-                if i.status == Item.CURSED:
-                    return False
-                if i.glyphs[0] in self._known_stuck_ring_amulet_glyphs:
-                    return False
-                if i.is_unambiguous() and i.object == life_saving:
-                    return False
-                if _is_combat_only_item(i):
-                    return False
-                return True
-
-            candidate = next((i for i in self.items if sheddable(i)), None)
-            if candidate is not None:
-                yield True
-                if self._try_remove(candidate):
-                    self._shed_for_hunger.add(candidate.text)
-                return
-        else:
-            if self._shed_for_hunger:
-                text = next(iter(self._shed_for_hunger))
-                candidate = next((i for i in self.items if not i.equipped and i.text == text), None)
-                if candidate is not None:
-                    yield True
-                    self.put_on(candidate)
-                    self._shed_for_hunger.discard(text)
-                    return
-                self._shed_for_hunger.discard(text)
-
-        yield False
 
     @utils.debug_log('inventory.check_items')
     @Strategy.wrap
@@ -1536,26 +1433,236 @@ class Inventory:
     @Strategy.wrap
     def check_containers(self):
         yielded = False
+        # a welded two-hander (a cursed dwarvish mattock the dive dug with) leaves no free hand for
+        # #untrap or #loot: 450 'Your hands seem to be too busy' panics in the s10-s13 runs
+        main = self.items.main_hand
+        if main is not None and main.status == Item.CURSED and getattr(main.objs[0], 'bi', False):
+            yield False
+        if self._here() in self.multi_container_squares:
+            yield False
+        bl = self.agent.blstats
+        hurt = bl.hitpoints < max(15, bl.max_hitpoints // 2)
         for item in self.agent.inventory.items_below_me:
             if item.is_possible_container():
+                # an unidentified bag may be a bag of tricks: 'It develops a huge set of teeth and bites
+                # you!' (d10) killed an XL1 that had just prayed out of a bear trap
+                if hurt and any(o.name == 'bag of tricks' for o in item.objs):
+                    continue
                 if not yielded:
                     yielded = True
                     yield True
-                spot = (self.agent.current_level().key(), self.agent.blstats.y, self.agent.blstats.x)
-                if spot in self._unopenable_containers:
-                    continue
                 if item.is_chest() and not (item.is_unambiguous() and item.object.name == 'ice box'):
                     fail_msg = self.agent.untrap_container_below_me()
-                    if fail_msg == 'hands busy':
-                        # "Your hands seem to be too busy for that": retrying loops until the
-                        # no-progress guard ends the game, so leave this container alone
-                        self._unopenable_containers.add(spot)
-                        continue
                     if fail_msg is not None and check_if_triggered_container_trap(fail_msg):
                         raise AgentPanic('triggered trap while looting')
                 self.check_container_content(item)
         if not yielded:
             yield False
+
+    # jf: buying food. AutoAscend never shopped, but a hunger prayer costs the prayer an HP emergency needs
+    # (33 of 37 tour deaths came under 1000 turns after the last prayer; 14 of them fainting) and fails
+    # 1.5-2.6% of the time. The tour reaches Minetown with ~240 gold (median): 3-4 food rations.
+    # Nutrition by name (objects.c); only foods safe for anyone (no tripe, eggs, tins or corpses).
+    BUY_FOOD_NUTRITION = {'food ration': 800, 'cram ration': 600, 'lembas wafer': 800, 'K-ration': 400,
+                          'C-ration': 300, 'pancake': 200, 'candy bar': 100, 'cream pie': 100,
+                          'fortune cookie': 40, 'apple': 50, 'orange': 80, 'pear': 50, 'melon': 100,
+                          'banana': 80, 'carrot': 50, 'slime mold': 80, 'kelp frond': 30}
+
+    def carried_nutrition(self):
+        return sum(self.BUY_FOOD_NUTRITION.get(item.object.name, 0) * item.count
+                   for item in self.agent.edible_carried_food() if item.is_unambiguous())
+
+    def _food_for_sale(self, dis):
+        level = self.agent.current_level()
+        gold = self.agent.blstats.gold
+        best = None
+        for y, x in zip(*(level.shop_interior & (level.item_count > 0)).nonzero()):
+            if dis[y, x] == -1:
+                continue
+            for item in level.items[y, x]:
+                if item.shop_status != Item.FOR_SALE or not item.is_unambiguous():
+                    continue
+                nutrition = self.BUY_FOOD_NUTRITION.get(item.object.name)
+                if nutrition is None or not item.price or item.price > gold:
+                    continue
+                score = nutrition / item.price - dis[y, x] / 1000
+                if best is None or score > best[0]:
+                    best = (score, int(y), int(x), item.object.name, item.price)
+        return best
+
+    def pay_or_drop_unpaid(self):
+        """Never walk off with unpaid goods: pay (one item on the bill: '... for N zorkmids.  Pay? [yn]',
+        answered 'y'), and drop whatever is still unpaid (not enough gold)."""
+        if not any(i.shop_status == Item.UNPAID for i in flatten_items(self.items)):
+            return
+        self.agent.step(A.Command.PAY)
+        unpaid = [i for i in flatten_items(self.items) if i.shop_status == Item.UNPAID]
+        if unpaid:
+            self.agent.log(f'SHOP could not pay for {[i.text for i in unpaid]}: dropping')
+            self.drop(unpaid)
+
+    # ---- sell-offer price identification (jf_config.SELL_PRICE_ID)
+    # Dropping an item in a shop that buys its class makes the shopkeeper offer its base price / 2, or 3/8 of it
+    # from a quarter of the shopkeepers (shk.c set_cost, unidentified items). Declining leaves it ours
+    # ('no charge') to pick up again. A potion's price narrows levitation to the 200 zm group (speed,
+    # levitation, enlightenment, full healing, polymorph): castle_logic then quaffs one or two potions instead
+    # of six, most of them paralysis/sleeping/blindness risks next to the moat. 21 of 90 base games entered a
+    # general store or liquor emporium after the dive started, carrying 6-9 potion types.
+    _SELL_BUYERS = {nh.POTION_CLASS: (1, 4), nh.RING_CLASS: (1, 7), nh.ARMOR_CLASS: (1, 2), nh.AMULET_CLASS: (1, 7)}
+    _SELL_OFFER = re.compile(r'offers( only)? (\d+) gold pieces? for (?:your|the) ')
+
+    @staticmethod
+    def _sell_offers(cost):
+        """Possible per-unit offers for an unidentified item of this base price."""
+        normal = (cost * 10 // 2 + 5) // 10
+        reduced = (cost * 3 * 10 // 8 + 5) // 10
+        return {max(normal, 1), max(reduced, 1)}
+
+    def _sell_candidates(self, shop_type):
+        key = self.agent.current_level().key()
+        out = []
+        for item in self.items:
+            if item.equipped or item.is_unambiguous() or item.category not in self._SELL_BUYERS or \
+                    shop_type not in self._SELL_BUYERS[item.category] or not power.is_passage_candidate(item):
+                continue
+            if (key, item.glyphs[0]) in self._sell_tested or len({o.cost for o in item.objs}) <= 1:
+                continue
+            out.append(item)
+        # the levitation carriers first: potions, rings, boots
+        out.sort(key=lambda i: (i.category != nh.POTION_CLASS, i.category != nh.RING_CLASS))
+        return out
+
+    def _sell_test(self, item):
+        """Drop one unit, decline the shopkeeper's offer. Returns the offer prompts seen."""
+        letter = self.items.get_letter(item)
+        prompts = []
+
+        def gen():
+            if item.count > 1:
+                yield '1'
+            yield letter
+            for _ in range(8):
+                obs = self.agent._observation
+                if obs['misc'][0]:            # a y/n question: the sale offer, or credit instead of gold
+                    prompts.append(self.agent.single_message)
+                    yield 'n'
+                elif obs['misc'][2]:          # --More--
+                    yield A.MiscAction.MORE
+                else:
+                    return
+
+        with self.agent.atom_operation():
+            self.agent.step(A.Command.DROP, gen())
+        return prompts
+
+    def _sell_record(self, item, prompts):
+        g = item.glyphs[0]
+        offer = None
+        for p in prompts:
+            m = self._SELL_OFFER.search(p)
+            if m and not m.group(1):
+                offer = int(m.group(2))
+        if offer is None:
+            self.agent.log(f'POWER sell-test {item.text!r}: no clean offer ({prompts!r})')
+            return
+        # armour prices include 10 per point of enchantment (getprice): allow +0..+2
+        spes = (0, 1, 2) if item.category == nh.ARMOR_CLASS else (0,)
+        fits = [o for o in item.objs if any(offer in self._sell_offers(o.cost + 10 * s) for s in spes)]
+        if not fits:
+            self.agent.log(f'POWER sell-test {item.text!r}: offer {offer} fits nothing in {[o.name for o in item.objs]}')
+            return
+        lo, hi = min(o.cost for o in fits), max(o.cost for o in fits)
+        old = self.item_manager._glyph_to_price_range.get(g)
+        if old is not None:
+            lo, hi = max(lo, old[0]), min(hi, old[1])
+        if lo > hi or not any(lo <= o.cost <= hi for o in item.objs):
+            return
+        self.item_manager._glyph_to_price_range[g] = (lo, hi)
+        self.item_manager.possible_objects_from_glyph(g)
+        self.agent.log(f'POWER sell-test {item.text!r}: offer {offer} -> base {lo}-{hi}: '
+                       f'{sorted({o.name for o in fits})}')
+
+    @utils.debug_log('inventory.sell_price_identify')
+    @Strategy.wrap
+    def sell_price_identify(self):
+        agent = self.agent
+        if not jf_config.SELL_PRICE_ID or agent.character.prop.hallu or agent.character.prop.blind or \
+                agent.character.prop.polymorph or agent.hands_welded():
+            yield False
+            return
+        level = agent.current_level()
+        bl = agent.blstats
+        if not level.shop_interior[bl.y, bl.x] or bl.hunger_state >= Hunger.WEAK or \
+                bl.hitpoints < 0.5 * bl.max_hitpoints or agent.get_visible_monsters() or \
+                not utils.isin(agent.glyphs, G.SHOPKEEPER).any():
+            yield False
+            return
+        # a dunce cap or a bare shirt changes the offers (divisor 3)
+        items = self.items
+        if (items.helm is not None and any(o.name == 'dunce cap' for o in items.helm.objs)) or \
+                (items.shirt is not None and items.suit is None and items.cloak is None):
+            yield False
+            return
+        candidates = self._sell_candidates(int(level.shop_type[bl.y, bl.x]))
+        if not candidates:
+            yield False
+            return
+        # an empty square of the shop floor, so the pickup can only take our own item back
+        dis = agent.bfs()
+        free = level.shop_interior & (level.item_count == 0) & (dis != -1)
+        if not free.any():
+            yield False
+            return
+        yield True
+        if not free[bl.y, bl.x]:
+            ty, tx = min(zip(*free.nonzero()), key=lambda p: dis[p])
+            agent.go_to(ty, tx)
+            return
+        item = candidates[0]
+        self._sell_tested.add((level.key(), item.glyphs[0]))
+        prompts = self._sell_test(item)
+        self._sell_record(item, prompts)
+        self.get_items_below_me()
+        mine = [i for i in self.items_below_me if i.shop_status == Item.NOT_SHOP]
+        if mine:
+            self.pickup(mine)
+        self.items.update(force=True)
+
+    @utils.debug_log('inventory.buy_food')
+    @Strategy.wrap
+    def buy_food(self):
+        agent = self.agent
+        bl = agent.blstats
+        if not jf_config.BUY_FOOD or bl.gold < 20 or bl.hunger_state >= Hunger.FAINTING:
+            yield False
+        level = agent.current_level()
+        if not level.shop_interior.any():
+            yield False
+        if any(i.shop_status == Item.UNPAID for i in flatten_items(self.items)):
+            yield True
+            self.pay_or_drop_unpaid()
+            return
+        if self.carried_nutrition() >= jf_config.BUY_FOOD_UNTIL or agent._carries_digging_tool() or \
+                agent.get_visible_monsters():
+            yield False
+        dis = agent.bfs()
+        target = self._food_for_sale(dis)
+        if target is None:
+            yield False
+        _, y, x, name, price = target
+        yield True
+        if (bl.y, bl.x) != (y, x):
+            # walk there and buy in one go (between every(3) turns check_items walked us off the square again)
+            agent.go_to(y, x)
+            if (agent.blstats.y, agent.blstats.x) != (y, x):
+                return
+        items = [i for i in self.items_below_me
+                 if i.shop_status == Item.FOR_SALE and i.is_unambiguous() and i.object.name == name]
+        if not items:
+            return
+        agent.log(f'SHOP buying {name} for {price} (gold {bl.gold})')
+        self.pickup(items[0], 1)
+        self.pay_or_drop_unpaid()
 
     @utils.debug_log('inventory.go_to_item_to_pickup')
     @Strategy.wrap
@@ -1569,11 +1676,16 @@ class Inventory:
             yield False
 
         mask[mask] = self.agent.current_level().item_count[mask] != 0
+        for (dn, ln, uy, ux), until in self.unreachable_items_until.items():
+            if (dn, ln) == level.key() and until > self.agent.blstats.time:
+                mask[uy, ux] = False
 
         items = {}
         for y, x in sorted(zip(*mask.nonzero()), key=lambda p: dis[p]):
             for i in level.items[y, x]:
                 assert i not in items
+                if self.dropped_here(i, (y, x)):
+                    continue
                 items[i] = (y, x)
 
         if not items:
@@ -1581,8 +1693,8 @@ class Inventory:
 
         items = {i: pos for item, pos in items.items() for i in flatten_items([item])}
 
-        free_items = list(filter(lambda i: i.can_be_dropped_from_inventory(), flatten_items(self.items)))
-        forced_items = list(filter(lambda i: not i.can_be_dropped_from_inventory(), flatten_items(self.items)))
+        free_items = list(filter(lambda i: self._droppable(i), flatten_items(self.items)))
+        forced_items = list(filter(lambda i: not self._droppable(i), flatten_items(self.items)))
         item_split = self.agent.global_logic.item_priority.split(
             free_items + list(items.keys()), forced_items,
             self.agent.character.carrying_capacity)
@@ -1611,7 +1723,13 @@ class Inventory:
         self.item_manager.price_identification()
         if self.agent.current_level().shop_interior[self.agent.blstats.y, self.agent.blstats.x]:
             yield False
+        if self.unreachable_items_until.get(self._here(), -1) > self.agent.blstats.time:
+            yield False
         if len(self.items_below_me) == 0:
             yield False
 
         yield from self.arrange_items().strategy()
+
+
+from . import ring_amulet_logic as _ring_amulet_logic  # noqa: E402
+_ring_amulet_logic.install(Inventory)

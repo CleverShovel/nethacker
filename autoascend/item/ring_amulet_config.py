@@ -1,30 +1,25 @@
-# Ablation switches for ring/amulet handling (see Inventory.identify_amulet_by_wear/
-# wear_combat_only_rings_amulets/shed_rings_amulets_when_hungry in item/inventory.py). Each rule
-# can be turned off on its own; with all of them off the bot plays exactly like its parent (no
-# ring/amulet wear/remove logic at all, same as before this feature existed).
+# Ablation switches for ring/amulet handling (see ring_amulet_logic.py). With all three strategies
+# switched off the bot plays exactly like the tree this module is installed into.
 
-# put on an unidentified amulet when safe, to find out what it is. do_wear.c: strangulation gives
-# an immediate "constricts your throat" we react to by removing it at once (Amulet_off() cancels
-# the countdown); restful sleep gives no such message, so this is a weaker, structural safety net
-# (remove again next tick regardless) rather than a reactive one. Rings are NOT covered by an
-# equivalent flag: do_wear.c's Ring_on() has no message at all for its dangerous types (teleport/
-# hunger/aggravate monster/polymorph), so "wear and see" has no safety net for rings.
+# put on an unidentified amulet when safe, to find out what it is. do_wear.c: strangulation gives an
+# immediate "It constricts your throat!" that we react to by removing the amulet at once
+# (Amulet_off() cancels the countdown). A cursed one cannot be #removed ("You can't.  It is cursed."),
+# so a prayer must be available up front and is the fallback (pray.c: strangulation is major trouble).
 AMULET_IDENTIFY_BY_WEAR = True
-# minimum HP fraction and hostile-monster-free radius required before trying an amulet on
 AMULET_WEAR_MIN_HP_FRAC = 0.6
 AMULET_WEAR_SAFE_RADIUS = 4
 
-# hold onto a ring/amulet that ONLY affects combat resolution (increase accuracy/damage, AC
-# protection, reflection) only while a hostile monster is within ENGAGE_RADIUS; take it off
-# otherwise, since -- unlike resistances or sustain abilities -- it does nothing for us between
-# fights and still costs nutrition (eat.c gethungry(): 1/20 turns per ring, 1/20 per amulet).
+# wear increase accuracy/damage, protection rings and the reflection amulet (do_wear.c: they only
+# change combat resolution) only while a hostile is within ENGAGE_RADIUS, take them off afterwards
 COMBAT_ONLY_WEAR = True
 ENGAGE_RADIUS = 6
-# turns to wait after the last hostile leaves ENGAGE_RADIUS before taking the item back off, so a
-# monster hovering at the edge of the radius doesn't cause a wear/remove flip every turn
 DISENGAGE_COOLDOWN = 10
 
-# take off non-essential rings/amulets once Hungry or worse, to stretch remaining food; re-equip
-# once fed again. Never touches a worn amulet of life saving, or an item already managed by
-# COMBAT_ONLY_WEAR above.
+# take off non-essential rings/amulets once Hungry or worse (eat.c gethungry(): 1 nutrition per 20
+# turns per worn ring/amulet), put them back once fed
 NUTRITION_REMOVE = True
+
+# no ring/amulet logic from this depth on: the castle (depth 25-29) and Gehennom belong to the tree's
+# own levitation / magical breathing / teleport-control machinery, which wears and removes rings and
+# amulets on purpose -- removing a levitation ring over the moat would drown the character
+MAX_DEPTH = 24

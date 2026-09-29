@@ -21,20 +21,11 @@ class StatsLogger:
             "melee_gas_spore": 0,
             "ad_aerarium_below_me": 0,
             "drop_gold": 0,
-            "ring_seen_on_ground": 0,
-            "amulet_seen_on_ground": 0,
-            "ring_pickup": 0,
-            "amulet_pickup": 0,
-            "ring_curse_revealed": 0,
-            "amulet_curse_revealed": 0,
             **{f"cast_{n}": 0 for n in character.ALL_SPELL_NAMES},
             **{f"cast_fail_{n}": 0 for n in character.ALL_SPELL_NAMES},
         }
         self._max_values = {
             "search_diff": -float('inf'),
-        }
-        self._min_values = {
-            "first_ring_or_amulet_depth": float('inf'),
         }
 
         self._cumulative_values = {
@@ -42,8 +33,7 @@ class StatsLogger:
         }
 
         self.gold_stats = ['mean', 'median', 'std', 'min', 'max', 'first', 'last']
-        self._keys = list(self._values) + list(self._max_values) + list(self._min_values) \
-            + list(self._cumulative_values) + self.gold_stats
+        self._keys = list(self._values) + list(self._max_values) + list(self._cumulative_values) + self.gold_stats
 
         self.gold = []
 
@@ -59,14 +49,10 @@ class StatsLogger:
     def log_max_value(self, name, value):
         self._max_values[name] = max(self._max_values[name], value)
 
-    def log_min_value(self, name, value):
-        self._min_values[name] = min(self._min_values[name], value)
-
     def get_stats_dict(self):
         ret = dict()
         ret.update(self._values)
         ret.update(self._max_values)
-        ret.update(self._min_values)
         ret.update({k: max(v.values()) for k, v in self._cumulative_values.items()})
 
         for stat in self.gold_stats:

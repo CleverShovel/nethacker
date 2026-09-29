@@ -4,23 +4,33 @@ from itertools import product
 import numpy as np
 from scipy import signal
 
-from ..glyph import G, MON, Hunger
+from ..glyph import G, MON
+from .. import jf_config, utils
+from ..item import Item
 from ..utils import adjacent
-from . import monster_profile, rules_config as cfg
-from .monster_utils import is_monster_faster, is_dangerous_monster, is_only_ranged_slow, imminent_death_on_melee, \
-    EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
+from .monster_utils import is_monster_faster, is_dangerous_monster, \
+    ONLY_RANGED_SLOW_MONSTERS, EXPLODING_MONSTERS, WEAK_MONSTERS, consider_melee_only_ranged_if_hp_full
 from .movement_priority import draw_monster_priority_positive, draw_monster_priority_negative
 from .utils import wielding_ranged_weapon, line_dis_from, inside
+
+
+def spore_blast_hits_friend(agent, y, x):
+    """A gas spore killed at (y, x) explodes over its 3x3 square: a pet or peaceful there gets hurt and
+    the hero gets the blame (a shopkeeper next to a spore turned hostile and killed an XL8 Valkyrie)."""
+    sl = np.s_[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2]
+    if agent.monster_tracker.peaceful_monster_mask[sl].any() or utils.any_in(agent.glyphs[sl], G.PETS):
+        return True
+    # a pet seen here lately but out of view now may be right behind the spore: a thrown dagger's blast
+    # killed an unseen kitten ('You kill it!', 'rumble of distant thunder': -15 alignment on a Valkyrie's
+    # record that starts at 0, so the first grind prayer failed at T1364)
+    seen = agent.global_logic.dive.pet_seen.get(agent.current_level().key())
+    return seen is not None and agent.blstats.time - seen < 100 and not utils.any_in(agent.glyphs, G.PETS)
 
 
 def melee_monster_priority(agent, monsters, monster):
     _, y, x, mon, _ = monster
     ret = 1
-    if cfg.THREAT:
-        healthy = not imminent_death_on_melee(agent, monster)
-    else:
-        healthy = agent.blstats.hitpoints > 8
-    if healthy or is_monster_faster(agent, monster):
+    if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
@@ -30,7 +40,7 @@ def melee_monster_priority(agent, monsters, monster):
         ret += 1
     # if not wielding_melee_weapon(agent):
     #     ret -= 5
-    if is_only_ranged_slow(mon):
+    if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
         if not consider_melee_only_ranged_if_hp_full(agent, monster):
             ret -= 100
             if mon.mname == 'floating eye':
@@ -39,6 +49,8 @@ def melee_monster_priority(agent, monsters, monster):
                 ret -= 5
 
     if mon.mname == 'gas spore':
+        if spore_blast_hits_friend(agent, y, x):
+            return ret - 200
         # handle a specific case when you are trapped by a gas spore
         if len(agent.get_visible_monsters()) == 1 \
                 and agent.blstats.hitpoints / agent.blstats.max_hitpoints:
@@ -52,14 +64,29 @@ def melee_monster_priority(agent, monsters, monster):
     return ret
 
 
+WATCH_GLYPHS = frozenset(MON.from_name(n) for n in ('watchman', 'watch captain'))
+
+
+def missiles_risk_the_watch(agent):
+    """Minetown: a stray missile (a miss, or the rest of a volley past a dying target) that hits a peaceful
+    out of sight angers the Watch (a volley killed a Mordor orc and its 2nd dagger hit a hobbit behind it;
+    the watchmen killed the XL8). Melee only there."""
+    gl = agent.global_logic
+    if gl.minetown_level is not None and agent.current_level().key() == gl.minetown_level:
+        return True
+    return utils.any_in(agent.glyphs, WATCH_GLYPHS)
+
+
 def ranged_priority(agent, dy, dx, monsters):
+    if missiles_risk_the_watch(agent):
+        return None
     ret = 11
 
     closest_mon_dis = float('inf')
     for monster in monsters:
         _, my, mx, mon, _ = monster
         assert my != agent.blstats.y or mx != agent.blstats.x
-        if mon.mname not in WEAK_MONSTERS and not is_only_ranged_slow(mon):
+        if mon.mname not in WEAK_MONSTERS + ONLY_RANGED_SLOW_MONSTERS:
             closest_mon_dis = min(closest_mon_dis, line_dis_from(agent, my, mx))
 
     if closest_mon_dis == 1:
@@ -98,6 +125,23 @@ def ranged_priority(agent, dy, dx, monsters):
                 ret -= 6
                 if mon.mname == 'gas spore':  # only gas spore ?
                     ret -= 100
+            # hypothesis: a gas spore's explosion (radius 1) that kills the pet costs -15 alignment
+            # ("rumble of distant thunder"), after which every prayer fails and the character
+            # starves (DT6A seed 1). Astra: kill spores from range only, away from pets.
+            if mon.mname == 'gas spore' and spore_blast_hits_friend(agent, y, x):
+                return None
+            # a miss, or the rest of a multishot volley, flies on past the target: never with a pet or a
+            # peaceful behind it (two unseen games hit Minetown gnomes that way: the Watch killed them)
+            by, bx, reach = y, x, agent.character.get_range(launcher, ammo)
+            for _ in range(max(reach - dis, 0)):
+                by += dy
+                bx += dx
+                if not 0 <= by < agent.glyphs.shape[0] or not 0 <= bx < agent.glyphs.shape[1] or \
+                        not agent.current_level().walkable[by, bx]:
+                    break
+                if agent.glyphs[by, bx] in G.PETS or \
+                        (agent.glyphs[by, bx] in G.MONS and not any(m[1] == by and m[2] == bx for m in monsters)):
+                    return None
             return ret, y, x, monster[0]
 
 
@@ -146,8 +190,9 @@ def _simulate_wand_path(agent, wand, monsters, y, x, dy, dx, range_left, hit_tar
             monster = 'pet'
             # For each monster hit, range decreases by 2.
             range_left -= 2
-        elif inside(agent, y, x) and agent.monster_tracker.peaceful_monster_mask[y, x]:
-            # a ray through a shopkeeper, priest or watchman turns them hostile
+        elif inside(agent, y, x) and agent.glyphs[y, x] in G.MONS and (y, x) != (agent.blstats.y, agent.blstats.x):
+            # a monster that isn't a known hostile: a peaceful (a lightning bolt at a wraith hit a watch
+            # captain and the Watch killed the XL10)
             monster = 'peaceful'
             range_left -= 2
         elif agent.blstats.y == y and agent.blstats.x == x:
@@ -175,11 +220,13 @@ def simulate_wand_path(agent, wand, monsters, dy, dx):
 
 def get_potential_wand_usages(agent, monsters, dy, dx):
     ret = []
+    if missiles_risk_the_watch(agent):
+        return ret
     player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
     # TODO: also get items recursively from bags
     for item in agent.inventory.items:
         targeted_monsters = set()
-        if not item.is_offensive_usable_wand() or agent.wand_is_empty(item):
+        if not item.is_offensive_usable_wand() or agent.inventory.is_known_empty(item):
             continue
         priority = 0
         # print('--------------', dy, dx)
@@ -188,7 +235,7 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
             if monster == 'pet':
                 priority -= p * 20
             elif monster == 'peaceful':
-                priority -= p * 100
+                priority -= p * 200
             elif monster == 'self':
                 priority -= p * 30
             elif monster is not None:
@@ -209,21 +256,26 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
     return ret
 
 
+def in_gehennom(agent):
+    """monmove.c onscary(): Elbereth scares nothing in Gehennom (Inhell); engraving it there only hands out a
+    free hit, and waiting on it is standing still under attack."""
+    return jf_config.GEHENNOM_DIVE and agent.current_level().dungeon_number == 1
+
+
 def elbereth_action(agent, monsters):
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
+        return []
+    if in_gehennom(agent):
         return []
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
     for monster in monsters:
         _, my, mx, mon, _ = monster
-        if is_only_ranged_slow(mon):
+        if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
-        if cfg.ELBERETH and not monster_profile.respects_elbereth(mon):
-            # onscary() never scares it: it keeps hitting through the engraving, so the turn is wasted
-            return []
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
@@ -241,7 +293,7 @@ def elbereth_action(agent, monsters):
 
 
 def wait_action(agent, monsters):
-    if agent.inventory.engraving_below_me.lower() == 'elbereth':
+    if agent.inventory.engraving_below_me.lower() == 'elbereth' and not in_gehennom(agent):
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
         priority = 30 - player_hp_ratio * 40
         return [(priority, ('wait',))]
@@ -280,13 +332,11 @@ def get_available_actions(agent, monsters):
                 pri, y, x, monster = ranged_pr
                 if agent.inventory.engraving_below_me.lower() == 'elbereth':
                     pri -= 100
-                if all(is_only_ranged_slow(monster[3]) for monster in monsters):
+                if all(monster[3].mname in ONLY_RANGED_SLOW_MONSTERS for monster in monsters):
                     pri += 10
                 actions.append((pri, ('ranged', dy, dx)))
 
             actions.extend(get_potential_wand_usages(agent, monsters, dy, dx))
-
-    actions.extend(force_bolt_actions(agent, monsters))
 
     to_pickup = decide_what_to_pickup(agent)
     if to_pickup:
@@ -298,57 +348,17 @@ def get_available_actions(agent, monsters):
     return actions
 
 
-FORCE_BOLT_RANGE = 6  # the bolt flies rn1(8, 6) squares, so 6 always reaches
-
-
-def force_bolt_actions(agent, monsters):
-    """Cast force bolt (2d6, rarely misses) at the nearest hostile on a straight, clear line.
-
-    Wizards start knowing it and it hits about twice as hard as their quarterstaff, yet the
-    fight heuristic only ever meleed; this ranks the bolt just above meleeing the same monster.
-    """
-    character = agent.character
-    if 'force bolt' not in character.known_spells or agent.blstats.energy < 5:
-        return []
-    if agent.blstats.hunger_state >= Hunger.WEAK:  # "You are too hungry to cast that spell."
-        return []
-    if character.spell_fail_chance.get('force bolt', 1) > 0.3:
-        return []
-    if agent.inventory.engraving_below_me.lower() == 'elbereth':
-        return []
-    y0, x0 = agent.blstats.y, agent.blstats.x
-    walkable = agent.current_level().walkable
-    peaceful = agent.monster_tracker.peaceful_monster_mask
-    best = None
-    for monster in monsters:
-        _, y, x, mon, _ = monster
-        dy, dx = y - y0, x - x0
-        dist = max(abs(dy), abs(dx))
-        if dist == 0 or dist > FORCE_BOLT_RANGE or not (dy == 0 or dx == 0 or abs(dy) == abs(dx)):
-            continue
-        if mon.mname in EXPLODING_MONSTERS and dist == 1:
-            continue
-        sy, sx = int(np.sign(dy)), int(np.sign(dx))
-        cy, cx, clear = y0, x0, True
-        for _ in range(dist - 1):
-            cy, cx = cy + sy, cx + sx
-            if not walkable[cy, cx] or agent.glyphs[cy, cx] in G.PETS or peaceful[cy, cx]:
-                clear = False
-                break
-        if not clear:
-            continue
-        priority = melee_monster_priority(agent, monsters, monster) + 2 if dist == 1 else 14
-        if best is None or priority > best[0]:
-            best = (priority, ('force_bolt', sy, sx))
-    return [best] if best is not None else []
-
-
 def decide_what_to_pickup(agent):
+    # never a shop's goods: an unseen game picked up a for-sale dagger (Grimtooth), threw it, owed 2204
+    # zorkmids and was killed by the shopkeeper
     projectiles_below_me = [i for i in agent.inventory.items_below_me
-                            if i.is_thrown_projectile() or i.is_fired_projectile()]
+                            if (i.is_thrown_projectile() or i.is_fired_projectile()) and
+                            i.shop_status == Item.NOT_SHOP]
     my_launcher, ammo = agent.inventory.get_best_ranged_set(additional_ammo=[i for i in projectiles_below_me])
     to_pickup = []
     for item in agent.inventory.items_below_me:
+        if item.shop_status != Item.NOT_SHOP:
+            continue
         if item.is_thrown_projectile() or (my_launcher is not None and item.is_fired_projectile(launcher=my_launcher)):
             to_pickup.append(item)
     return to_pickup
@@ -372,7 +382,8 @@ def goto_action(agent, priority, monsters):
         if not adjacent((agent.blstats.y, agent.blstats.x), (my, mx)):
             # and not mon.mname in ONLY_RANGED_SLOW_MONSTERS:
             return [(1, ('go_to', my, mx))]
-    assert 0, monsters
+    # every monster adjacent and nothing to do (e.g. no weapon known): fight2 falls back to moving/waiting
+    return []
 
 
 def get_corridors_priority_map(walkable):
@@ -388,7 +399,8 @@ def get_priorities(agent):
     """ Returns a pair (move priority heatmap, other actions (with priorities) list) """
     walkable = agent.current_level().walkable
     priority = np.zeros(walkable.shape, dtype=float)
-    monsters = agent.get_visible_monsters()
+    # without the monsters a stalled fight let go of (jf_config.FIGHT_STALL_TURNS)
+    monsters = agent.fight_monsters()
     for m in monsters:
         draw_monster_priority_positive(agent, m, priority, walkable)
     for m in monsters:

@@ -133,6 +133,13 @@ class AutoAscendDriver:
         self._fallback_action = _ACTION_TO_INDEX[int(autoascend_agent.A.Command.ESC)]
 
     def reset(self, initial_observation: Mapping[str, Any]) -> None:
+        # the game's first message tells a full moon / Friday 13th (NetHack allmain.c:48-57): the base
+        # Luck of the prayer model (nhmodel/prayer.py); the agent itself never sees this observation
+        self._initial_message = None
+        try:
+            self._initial_message = bytes(initial_observation["message"]).split(b"\0")[0].decode("latin-1")
+        except Exception:  # noqa: BLE001
+            self._initial_message = None
         del initial_observation
         self.close()
         self._restarts = 0
@@ -149,6 +156,21 @@ class AutoAscendDriver:
         self._agent.resumed_game = not fresh_game
         if not fresh_game and previous is not None:
             self._agent.previous_character = previous.character
+        # the prayer state survives a restart: a fresh agent took the game for prayer-free and could pray
+        # again at once (pray.c: too soon -> Luck -3 and an angry god)
+        try:
+            if fresh_game:
+                if self._agent.prayer_model is not None:
+                    self._agent.prayer_model.initial_message(getattr(self, '_initial_message', None))
+            elif previous is not None:
+                self._agent.last_prayer_turn = previous.last_prayer_turn
+                self._agent.prayer_failed = previous.prayer_failed
+                self._agent.prayer_hold_until = previous.prayer_hold_until
+                if getattr(previous, 'prayer_model', None) is not None:
+                    previous.prayer_model.adopt(self._agent)
+                    self._agent.prayer_model = previous.prayer_model
+        except Exception:  # noqa: BLE001
+            pass
         self._thread = threading.Thread(target=self._run_agent, args=(self._agent,), name="autoascend",
                                         daemon=True)
         self._thread.start()

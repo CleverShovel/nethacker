@@ -111,14 +111,14 @@ class AutoAscendDriver:
 
     # Timing: the arena kills a bot (and zeroes the episode) when one act() takes over 120 s.
     # Only the episode's first action may need a cold numba JIT compile (up to FIRST_ACTION_TIMEOUT);
-    # afterwards the worst case is HANG + RECOVER + RESTART = 20 + 5 + 20 = 45 s. The hang threshold
-    # stays well above slow-but-legit actions under CPU contention (p99 of per-episode max ~16 s,
-    # mostly the cold first action), so it only fires on real livelocks.
+    # afterwards the worst case is HANG + RECOVER + RESTART = 85 + 5 + 20 = 110 s. Compilation may occur after the initial ESC, so every action
+    # needs compilation headroom. 110 seconds leaves ten seconds below the
+    # arena deadline, including hang recovery and restart.
     FIRST_ACTION_TIMEOUT = 100.0
     RECOVER_TIMEOUT = 5.0
     RESTART_TIMEOUT = 20.0
 
-    def __init__(self, action_timeout: float = 100.0, hang_timeout: float = 20.0) -> None:
+    def __init__(self, action_timeout: float = 100.0, hang_timeout: float = 85.0) -> None:
         self._action_timeout = action_timeout
         self._hang_timeout = hang_timeout
         self._warm = False  # set once any agent in this process produced an action

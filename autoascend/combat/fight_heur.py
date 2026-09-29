@@ -20,11 +20,36 @@ def spore_blast_hits_friend(agent, y, x):
     sl = np.s_[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2]
     if agent.monster_tracker.peaceful_monster_mask[sl].any() or utils.any_in(agent.glyphs[sl], G.PETS):
         return True
+    if jf_config.SPORE_SAFE and _spore_blast_hits_people(agent, y, x):
+        return True
     # a pet seen here lately but out of view now may be right behind the spore: a thrown dagger's blast
     # killed an unseen kitten ('You kill it!', 'rumble of distant thunder': -15 alignment on a Valkyrie's
     # record that starts at 0, so the first grind prayer failed at T1364)
     seen = agent.global_logic.dive.pet_seen.get(agent.current_level().key())
     return seen is not None and agent.blstats.time - seen < 100 and not utils.any_in(agent.glyphs, G.PETS)
+
+
+def _spore_blast_hits_people(agent, y, x):
+    """SPORE_SAFE: the blast also counts as our attack on whoever we don't know to be peaceful yet: any @ in
+    the 3x3 (killing a watchman/shopkeeper/priest angered by it is murder even when he is hostile: Luck -2,
+    telepathy lost), and anything at all on the Minetown level (base3-public s13: 'You kill the gas spore!  The
+    watch captain is caught in the gas spore's explosion! ... You murderer!', prayers held 1200 turns)."""
+    y0, x0 = agent.blstats.y, agent.blstats.x
+    gl = agent.global_logic
+    minetown = gl.minetown_level is not None and agent.current_level().key() == gl.minetown_level
+    for yy in range(max(y - 1, 0), min(y + 2, agent.glyphs.shape[0])):
+        for xx in range(max(x - 1, 0), min(x + 2, agent.glyphs.shape[1])):
+            if (yy, xx) in ((y, x), (y0, x0)):
+                continue
+            g = agent.glyphs[yy, xx]
+            if not MON.is_monster(g):
+                continue
+            if minetown:
+                return True
+            mlet = MON.permonst(g).mlet
+            if (ord(mlet) if isinstance(mlet, str) else mlet) == MON.S_HUMAN:
+                return True
+    return False
 
 
 def melee_monster_priority(agent, monsters, monster):
@@ -34,6 +59,11 @@ def melee_monster_priority(agent, monsters, monster):
         ret += 15
     if wielding_ranged_weapon(agent) and not is_monster_faster(agent, monster):
         ret -= 6
+    if mon.mname == 'ghost' and agent.character.role == agent.character.HEALER and \
+            agent.blstats.experience_level < 4:
+        # A legal retreat beats an extended low-probability melee fight.
+        # If cornered, an attack remains available.
+        ret -= 25
     if mon.mname in EXPLODING_MONSTERS:
         ret -= 17
     if 'were' in mon.mname:
@@ -179,31 +209,31 @@ def _simulate_wand_path(agent, wand, monsters, y, x, dy, dx, range_left, hit_tar
         return
 
     for y, x, dy, dx, next_prob, range_penalty in get_next_states(agent, wand, y, x, dy, dx):
-        range_left -= range_penalty
+        branch_range = range_left - range_penalty
         monster = [m for m in monsters if m[1] == y and m[2] == x]
         if monster:
             assert len(monster) == 1
             monster = monster[0]
             # For each monster hit, range decreases by 2.
-            range_left -= 2
+            branch_range -= 2
         elif inside(agent, y, x) and agent.glyphs[y, x] in G.PETS:
             monster = 'pet'
             # For each monster hit, range decreases by 2.
-            range_left -= 2
+            branch_range -= 2
         elif inside(agent, y, x) and agent.glyphs[y, x] in G.MONS and (y, x) != (agent.blstats.y, agent.blstats.x):
             # a monster that isn't a known hostile: a peaceful (a lightning bolt at a wraith hit a watch
             # captain and the Watch killed the XL10)
             monster = 'peaceful'
-            range_left -= 2
+            branch_range -= 2
         elif agent.blstats.y == y and agent.blstats.x == x:
             monster = 'self'
-            range_left -= 2
+            branch_range -= 2
         else:
             monster = None
 
         hit_targets[(y, x, monster)] += probability * next_prob
 
-        _simulate_wand_path(agent, wand, monsters, y, x, dy, dx, range_left - 1, hit_targets, 1.0)
+        _simulate_wand_path(agent, wand, monsters, y, x, dy, dx, branch_range - 1, hit_targets, probability * next_prob)
 
 
 def simulate_wand_path(agent, wand, monsters, dy, dx):
@@ -250,10 +280,59 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
         if targeted_monsters:
             # priority = priority * (1 - player_hp_ratio) - 10
             priority = priority - 15
-            if agent.inventory.engraving_below_me.lower() == 'elbereth':
+            if jf_config.AT_ELBERETH_FIX:
+                # a zap wipes nothing (zap.c has no u_wipe_engr); only hitting a monster the engraving scares
+                # erases it (mon.c setmangry: 'You feel like a hypocrite')
+                priority += min((elbereth_attack_penalty(agent, monsters, m) for _, _, m in targeted_monsters),
+                                default=0)
+            elif on_scaring_elbereth(agent, monsters):
                 priority -= 100
             ret.append((priority, ('zap', dy, dx, item, targeted_monsters)))
     return ret
+
+
+def at_ignorer_adjacent(agent, monsters):
+    """AT_ELBERETH_FIX: a monster that melees through Elbereth stands next to us (@ humans and elves, minotaurs;
+    an unseen attacker that hurt us on an intact Elbereth). Then waiting on the engraving only hands it free hits:
+    base4-jf16 s4 stood 5 turns in its dig pit on Elbereth while two Green-elves took it from 65 to 12 HP -- the
+    Elbereth penalty on every attack (-100) left 'wait' as fight2's best action. Attacking it doesn't cost the
+    engraving's protection against it (it has none), and kills it."""
+    if not jf_config.AT_ELBERETH_FIX:
+        return False
+    dive = agent.global_logic.dive
+    y0, x0 = agent.blstats.y, agent.blstats.x
+    return any(adjacent((m[1], m[2]), (y0, x0)) and dive._melee_ignores_elbereth(m[3]) for m in monsters)
+
+
+def on_scaring_elbereth(agent, monsters):
+    """Standing on an Elbereth that actually protects us (see at_ignorer_adjacent)."""
+    return agent.inventory.engraving_below_me.lower() == 'elbereth' and not at_ignorer_adjacent(agent, monsters)
+
+
+def elbereth_attack_penalty(agent, monsters, target):
+    """The -100 fight2 puts on attacking from an Elbereth square. Every attack wipes letters off the engraving
+    (uhitm.c attack -> u_wipe_engr(3); dothrow.c u_wipe_engr(2)), so it is right against the monsters the
+    engraving holds off, but not against one it doesn't (AT_ELBERETH_FIX): that one gets hit, and the Elbereth
+    is written again once it is dead (DIG_ESCAPE, fight2's elbereth action)."""
+    if agent.inventory.engraving_below_me.lower() != 'elbereth':
+        return 0
+    if jf_config.AT_ELBERETH_FIX and target is not None and \
+            agent.global_logic.dive._melee_ignores_elbereth(target[3]):
+        return 0
+    return -100
+
+
+def focus_ignorer(agent, mon):
+    """AT_ELBERETH_FIX + AT_FOCUS: hit the monster that ignores Elbereth first while an Elbereth could hold off the
+    rest (on one already, or able to write one; not in Gehennom, not blind). The first swing at it smudges the
+    engraving, and fight2 then turned on the crowd: harness Big Room seeds 16 and 37 hit a yeti, a jaguar, a hill
+    orc and a red naga with the Woodland-/Green-elf still alive, which kept the dig out off (an adjacent ignorer
+    stops it) until the XL7 was down to 3-11 HP. With the ignorer dead the dig out writes Elbereth and digs on."""
+    if not jf_config.AT_ELBERETH_FIX or not jf_config.AT_FOCUS or in_gehennom(agent) or agent.character.prop.blind:
+        return False
+    if not agent.global_logic.dive._melee_ignores_elbereth(mon):
+        return False
+    return agent.inventory.engraving_below_me.lower() == 'elbereth' or agent.can_engrave()
 
 
 def in_gehennom(agent):
@@ -270,12 +349,15 @@ def elbereth_action(agent, monsters):
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
+    dive = agent.global_logic.dive
     for monster in monsters:
         _, my, mx, mon, _ = monster
         if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
             continue
         if not adjacent((my, mx), (agent.blstats.y, agent.blstats.x)):
             continue
+        if jf_config.AT_ELBERETH_FIX and dive._melee_ignores_elbereth(mon):
+            continue   # the engraving doesn't hold it off: writing it only hands it a free hit
         multiplier = np.clip(20 / agent.blstats.hitpoints, 1.0, 1.5)
         if is_monster_faster(agent, monster):
             multiplier *= 2
@@ -293,53 +375,14 @@ def elbereth_action(agent, monsters):
 
 
 def wait_action(agent, monsters):
-    if agent.inventory.engraving_below_me.lower() == 'elbereth' and not in_gehennom(agent):
+    # RANGED_ON_ELB: no waiting on Elbereth while something shoots at us (it only stops melee)
+    if agent.global_logic.dive.shot_recently():
+        return []
+    if on_scaring_elbereth(agent, monsters) and not in_gehennom(agent):
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
         priority = 30 - player_hp_ratio * 40
         return [(priority, ('wait',))]
     return []
-
-
-def camera_actions(agent, monsters):
-    """hypothesis: a Tourist's expensive camera (~60-90 charges, unused so far) blinds an adjacent monster and makes
-    it flee 3 times in 4 (apply.c use_camera -> flash_hits_mon); flashing attackers at low HP beats trading
-    blows at 3/14 HP, which is how most Dlvl 1-3 Tourist games end (sewer rats, hobbits, ants). Only while
-    diving: in the levelling grind a fleeing monster is lost XP."""
-    if agent.character.prop.blind or agent.character.prop.polymorph or agent.blstats.max_hitpoints <= 0:
-        return []
-    camera = None
-    for item in agent.inventory.items:
-        if item.is_unambiguous() and item.object.name == 'expensive camera' and \
-                not agent.inventory.is_known_empty(item):
-            camera = item
-            break
-    if camera is None:
-        return []
-    ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
-    if not agent.global_logic.dive.diving or ratio >= 0.5:
-        return []
-    flashed = getattr(agent, '_camera_flashed', {})
-    # hypothesis: the flash undoes the Elbereth the dive stands on: a blinded monster no longer respects it
-    # (monmove.c onscary), and attacking from the square wipes it ('You feel like a hypocrite. The engraving
-    # beneath you fades': fem s5 at Dlvl 12, then a crowd of iguanas, ants and a centaur killed the digger).
-    # Leave Elbereth-respecting neighbours alone while it holds; flash only the ones that fight through it.
-    # sources: https://nethackwiki.com/wiki/Elbereth, https://nethackwiki.com/wiki/Expensive_camera,
-    # https://nethackwiki.com/wiki/Tourist, /refs/top/1c4099e80253 (_melee_ignores_elbereth, AT_ELBERETH_FIX)
-    on_elbereth = (agent.inventory.engraving_below_me or '').lower() == 'elbereth' and not in_gehennom(agent)
-    dive = agent.global_logic.dive
-    actions = []
-    for monster in monsters:
-        _, y, x, mon, _ = monster
-        if not adjacent((y, x), (agent.blstats.y, agent.blstats.x)):
-            continue
-        if on_elbereth and not dive._melee_ignores_elbereth(mon):
-            continue
-        if getattr(mon, 'mflags1', 0) & 0x00001000:  # M1_NOEYES
-            continue
-        if agent.blstats.time - flashed.get((y, x), -100) < 8:
-            continue
-        actions.append((25 + 20 * (1 - ratio), ('camera', y - agent.blstats.y, x - agent.blstats.x, camera)))
-    return actions
 
 
 def get_available_actions(agent, monsters):
@@ -350,8 +393,9 @@ def get_available_actions(agent, monsters):
         _, y, x, mon, _ = monster
         if adjacent((y, x), (agent.blstats.y, agent.blstats.x)):
             priority = melee_monster_priority(agent, monsters, monster)
-            if agent.inventory.engraving_below_me.lower() == 'elbereth':
-                priority -= 100
+            priority += elbereth_attack_penalty(agent, monsters, monster)
+            if focus_ignorer(agent, mon):
+                priority += jf_config.AT_FOCUS
             dy = y - agent.blstats.y
             dx = x - agent.blstats.x
             # hypothesis: refusing all bare contact with cockatrices prevents
@@ -372,8 +416,7 @@ def get_available_actions(agent, monsters):
             ranged_pr = ranged_priority(agent, dy, dx, monsters)
             if ranged_pr is not None:
                 pri, y, x, monster = ranged_pr
-                if agent.inventory.engraving_below_me.lower() == 'elbereth':
-                    pri -= 100
+                pri += elbereth_attack_penalty(agent, monsters, monster)
                 if all(monster[3].mname in ONLY_RANGED_SLOW_MONSTERS for monster in monsters):
                     pri += 10
                 actions.append((pri, ('ranged', dy, dx)))
@@ -384,7 +427,6 @@ def get_available_actions(agent, monsters):
     if to_pickup:
         actions.append((15, ('pickup', to_pickup)))
 
-    actions.extend(camera_actions(agent, monsters))
     actions.extend(elbereth_action(agent, monsters))
     actions.extend(wait_action(agent, monsters))
 
@@ -458,6 +500,18 @@ def get_priorities(agent):
     #         priority += get_corridors_priority_map(walkable)
     #         break
 
+    # Avoid accumulating melee contacts while lightly armored and seeking a tool.
+    if agent.character.role == agent.character.HEALER and 2 <= agent.blstats.depth <= 8 and \
+            agent.blstats.armor_class >= 5 and agent.global_logic.dive.digging_tool() is None and \
+            agent.current_level().dungeon_number == 0 and \
+            sum(0 <= m[0] <= 3 for m in monsters) >= 3 and \
+            all(getattr(m[3], 'mlevel', 99) <= 1 for m in monsters if 0 <= m[0] <= 3):
+        for _, my, mx, mon, _ in monsters:
+            if getattr(mon, 'mmove', 0) <= 0:
+                continue
+            for y, x in agent.neighbors(my, mx, shuffle=False):
+                priority[y, x] -= 12
+
     # use relative priority to te current position
     priority -= priority[agent.blstats.y, agent.blstats.x]
 
@@ -475,6 +529,10 @@ def get_move_actions(agent, dis, move_priority_heatmap):
         if not 0 <= y < dis.shape[0] or not 0 <= x < dis.shape[1]:
             continue
         if not dis[y, x] == 1:
+            continue
+        # a monster left out of the fight (the Valley's graveyard sleepers, VALLEY_GRAVE_FILTER) still occupies its
+        # square: moving there panics ('Monster on a next tile') in a loop
+        if in_gehennom(agent) and agent.monster_tracker.monster_mask[y, x]:
             continue
 
         if not np.isnan(move_priority_heatmap[y, x]):

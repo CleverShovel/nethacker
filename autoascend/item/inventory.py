@@ -1453,6 +1453,10 @@ class Inventory:
                     yield True
                 if item.is_chest() and not (item.is_unambiguous() and item.object.name == 'ice box'):
                     fail_msg = self.agent.untrap_container_below_me()
+                    if fail_msg == 'trapped':
+                        # a found trap is left alone: so are this square's containers from now on
+                        self.multi_container_squares.add(self._here())
+                        continue
                     if fail_msg is not None and check_if_triggered_container_trap(fail_msg):
                         raise AgentPanic('triggered trap while looting')
                 self.check_container_content(item)

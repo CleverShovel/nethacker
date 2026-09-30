@@ -9,11 +9,6 @@ class StatsLogger:
     def __init__(self):
         self._values = {
             "agent_panic": 0,
-            "recovery_started": 0,
-            "recovery_completed": 0,
-            "recovery_search": 0,
-            "recovery_search_confirmed": 0,
-            "recovery_search_same_turn": 0,
             "elbereth_write": 0,
             "container_untrap_success": 0,
             "container_untrap_fail": 0,

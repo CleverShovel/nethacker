@@ -221,7 +221,7 @@ class ExplorationLogic:
 
             # jf_config.UPWARD_RETURN: headed up the main line (or out of the Mines) to a shallower main-dungeon
             # level, a level with no known way there is explored for its up staircase only
-            upward = (jf_config.UPWARD_RETURN or jf_config.FALL_HOME) and dungeon_number == Level.DUNGEONS_OF_DOOM and \
+            upward = jf_config.UPWARD_RETURN and dungeon_number == Level.DUNGEONS_OF_DOOM and \
                 self.agent.current_level().dungeon_number in (Level.DUNGEONS_OF_DOOM, Level.GNOMISH_MINES) and \
                 self.agent.blstats.depth > level_number
             explore_strategy.preempt(self.agent, [

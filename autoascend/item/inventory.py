@@ -56,6 +56,7 @@ class Inventory:
         self.multi_container_squares = set()  # (dungeon, level, y, x) where #loot asks 'Loot which containers?'
         self._container_failures = {}         # (dungeon, level, y, x) -> failed use_container attempts
         self.unreachable_items_until = {}     # (dungeon, level, y, x) -> turn: items at a pit bottom out of reach
+        self._buy_food_blocked = {}           # (dungeon, level, y, x) -> (failed walks, skip until turn): BUY_FOOD_GIVEUP
 
     def is_known_empty(self, item):
         return item.text in self.empty_wands
@@ -83,14 +84,15 @@ class Inventory:
 
     def dropped_here(self, item, pos=None):
         """A scroll that may be scare monster which we dropped on this square: never pick it up again."""
-        if not jf_config.SCARE_KEEP or not power.is_scare_candidate(item):
+        # (the set is filled only by SCARE_KEEP drops and by castle_power's arrival drill)
+        if not self.dropped_scrolls or not power.is_scare_candidate(item):
             return False
         pos = pos if pos is not None else (self.agent.blstats.y, self.agent.blstats.x)
         return (self.agent.current_level().key(), (int(pos[0]), int(pos[1])), self._scroll_key(item)) in \
             self.dropped_scrolls
 
-    def _note_dropped(self, items, counts):
-        if not jf_config.SCARE_KEEP:
+    def _note_dropped(self, items, counts, force=False):
+        if not (jf_config.SCARE_KEEP or force):
             return
         here = (self.agent.current_level().key(), (int(self.agent.blstats.y), int(self.agent.blstats.x)))
         for item, count in zip(items, counts):
@@ -118,13 +120,15 @@ class Inventory:
         self.item_manager.update()
         self.items.update()
 
-        if self._previous_blstats is None or \
+        if (getattr(self, '_astra_blind_floor_skipped', False) and not self.agent.character.prop.blind) or \
+                self._previous_blstats is None or \
                 (self._previous_blstats.y, self._previous_blstats.x, \
                  self._previous_blstats.level_number, self._previous_blstats.dungeon_number) != \
                 (self.agent.blstats.y, self.agent.blstats.x, \
                  self.agent.blstats.level_number, self.agent.blstats.dungeon_number) or \
                 (self.engraving_below_me is None or self.engraving_below_me.lower() == 'elbereth'):
-            assume_appropriate_message = self._previous_blstats is not None and not self.engraving_below_me
+            assume_appropriate_message = self._previous_blstats is not None and not self.engraving_below_me and \
+                not getattr(self, '_astra_blind_floor_skipped', False)
 
             self._previous_blstats = self.agent.blstats
             self.items_below_me = None
@@ -531,6 +535,15 @@ class Inventory:
         assert not items
 
     def get_items_below_me(self, assume_appropriate_message=False):
+        # NetHack invent.c look_here returns a spent turn when blind.
+        # Floor metadata must not silently grant monsters another attack.
+        if self.agent.character.prop.blind:
+            self._astra_blind_floor_skipped = True
+            self.items_below_me = []
+            self.letters_below_me = []
+            self.engraving_below_me = ''
+            return []
+        self._astra_blind_floor_skipped = False
         with self.agent.panic_if_position_changes():
             with self.agent.atom_operation():
                 if not assume_appropriate_message:
@@ -915,7 +928,7 @@ class Inventory:
             is_dragonscale_armor = item.object.metal == O.DRAGON_HIDE
 
             allowed_statuses = [Item.UNCURSED, Item.BLESSED] + ([Item.UNKNOWN] if allow_unknown_status else [])
-            if item.status not in allowed_statuses and not is_dragonscale_armor:
+            if item.status not in allowed_statuses and not is_dragonscale_armor and not (item.equipped and item.status == Item.UNKNOWN):
                 continue
 
             slot = item.object.sub
@@ -1333,6 +1346,8 @@ class Inventory:
     @utils.debug_log('inventory.wear_best_stuff')
     @Strategy.wrap
     def wear_best_stuff(self):
+        if self.agent.blstats.time < getattr(self.agent, '_astra_food_undressed_until', -1) and not self.agent.get_visible_monsters():
+            yield False
         if self.agent.hands_welded():
             yield False   # armor can't come off (or go on over it) with the hands welded
             return
@@ -1416,7 +1431,13 @@ class Inventory:
         if not mask.any():
             yield False
 
+        key = self.agent.current_level().key()
         for y, x in zip(*mask.nonzero()):
+            # squares whose containers are left alone (several containers; CONTAINER_LOOP_FIX failures): check_containers
+            # skips them, so walking there only ping-pongs with the exploration
+            if jf_config.CONTAINER_LOOP_FIX and (*key, int(y), int(x)) in self.multi_container_squares:
+                mask[y, x] = False
+                continue
             for item in self.agent.current_level().items[y, x]:
                 if not item.is_possible_container():
                     mask[y, x] = False
@@ -1456,10 +1477,6 @@ class Inventory:
                     yield True
                 if item.is_chest() and not (item.is_unambiguous() and item.object.name == 'ice box'):
                     fail_msg = self.agent.untrap_container_below_me()
-                    if fail_msg == 'trapped':
-                        # a found trap is left alone: so are this square's containers from now on
-                        self.multi_container_squares.add(self._here())
-                        continue
                     if fail_msg is not None and check_if_triggered_container_trap(fail_msg):
                         raise AgentPanic('triggered trap while looting')
                 self.check_container_content(item)
@@ -1635,6 +1652,81 @@ class Inventory:
             self.pickup(mine)
         self.items.update(force=True)
 
+    # Buy a plain suit into an empty slot or for a one-point AC upgrade. Reserve gold for food and
+    # payment, exclude ambiguous magical armor, and pay before equipping.
+    SHOP_STARTER_SUITS = {'leather armor', 'studded leather armor', 'ring mail',
+                         'scale mail', 'chain mail', 'splint mail', 'banded mail',
+                         'elven mithril-coat', 'dwarvish mithril-coat'}
+
+    def _starter_suit_for_sale(self, dis):
+        level = self.agent.current_level()
+        best = None
+        for y, x in zip(*(level.shop_interior & (level.item_count > 0)).nonzero()):
+            if dis[y, x] < 0 or dis[y, x] > 12:
+                continue
+            for item in level.items[y, x]:
+                if item.shop_status != Item.FOR_SALE or not item.is_unambiguous():
+                    continue
+                if item.object.name not in self.SHOP_STARTER_SUITS or item.status == Item.CURSED:
+                    continue
+                if not item.price or item.price > self.agent.blstats.gold - 200 or item.get_ac() > -3:
+                    continue
+                current = self.items.suit
+                if current is not None and (not current.is_unambiguous() or current.status == Item.CURSED
+                                            or item.get_ac() > current.get_ac() - 1):
+                    continue
+                score = -item.get_ac() - dis[y, x] / 20 - item.price / 1000
+                if best is None or score > best[0]:
+                    best = (score, int(y), int(x), item.object.name)
+        return best
+
+    @utils.debug_log('inventory.buy_starter_suit')
+    @Strategy.wrap
+    def buy_starter_suit(self):
+        agent = self.agent
+        bl = agent.blstats
+        if (self.items.suit is not None and self.items.suit.status == Item.CURSED) or \
+                self.items.cloak is not None or agent.hands_welded():
+            yield False
+        if bl.gold < 220 or bl.hitpoints < bl.max_hitpoints * .8 or bl.hunger_state >= Hunger.HUNGRY:
+            yield False
+        if agent._carries_digging_tool() or (agent.character.teleportitis and not agent.character.teleport_control):
+            yield False
+        if any(m[3].mname != 'floating eye' for m in agent.get_visible_monsters()):
+            yield False
+        if any(i.shop_status == Item.UNPAID for i in flatten_items(self.items)):
+            yield False
+        target = self._starter_suit_for_sale(agent.bfs())
+        if target is None:
+            yield False
+        _, y, x, name = target
+        key = (agent.current_level().key(), y, x)
+        if key in getattr(self, '_starter_suit_attempts', set()):
+            yield False
+        yield True
+        if not hasattr(self, '_starter_suit_attempts'):
+            self._starter_suit_attempts = set()
+        self._starter_suit_attempts.add(key)
+        agent.go_to(y, x)
+        if (agent.blstats.y, agent.blstats.x) != (y, x):
+            return
+        items = [i for i in self.items_below_me if i.shop_status == Item.FOR_SALE
+                 and i.is_unambiguous() and i.object.name == name]
+        if not items:
+            return
+        agent.log(f'SHOP buying starter suit {name}')
+        self.pickup(items[0], 1)
+        self.pay_or_drop_unpaid()
+        owned = [i for i in self.items if i.shop_status == Item.NOT_SHOP
+                 and i.is_unambiguous() and i.object.name == name and i.status != Item.CURSED]
+        if owned and self.items.cloak is None:
+            if self.items.suit is not None:
+                if self.items.suit.status == Item.CURSED:
+                    return
+                self.takeoff(self.items.suit)
+            if self.items.suit is None:
+                self.wear(owned[0])
+
     @utils.debug_log('inventory.buy_food')
     @Strategy.wrap
     def buy_food(self):
@@ -1652,15 +1744,30 @@ class Inventory:
         if self.carried_nutrition() >= jf_config.BUY_FOOD_UNTIL or agent._carries_digging_tool() or \
                 agent.get_visible_monsters():
             yield False
+        if jf_config.SHOP_GUARD and agent.character.teleportitis and not agent.character.teleport_control:
+            # a random teleport between the pickup and the payment takes the goods out unpaid: Kops and an
+            # angry shopkeeper (base4-jf14 s10, dead)
+            yield False
         dis = agent.bfs()
         target = self._food_for_sale(dis)
         if target is None:
             yield False
         _, y, x, name, price = target
+        key = (level.dungeon_number, level.level_number, y, x)
+        if jf_config.BUY_FOOD_GIVEUP and self._buy_food_blocked.get(key, (0, -1))[1] > bl.time:
+            yield False
         yield True
         if (bl.y, bl.x) != (y, x):
             # walk there and buy in one go (between every(3) turns check_items walked us off the square again)
-            agent.go_to(y, x)
+            try:
+                agent.go_to(y, x)
+            finally:
+                # BUY_FOOD_GIVEUP: a shopkeeper standing in the path panicked every go_to ('Monster on a next
+                # tile'), and the tour walked back between two tries: base4-jf14 s6 went N/S ~660 times per
+                # 500 turns for 1500 turns on its Dlvl-2 grind. After 3 failed walks, leave that item alone.
+                if jf_config.BUY_FOOD_GIVEUP and (agent.blstats.y, agent.blstats.x) != (y, x):
+                    fails = self._buy_food_blocked.get(key, (0, -1))[0] + 1
+                    self._buy_food_blocked[key] = (fails, agent.blstats.time + 2000 if fails >= 3 else -1)
             if (agent.blstats.y, agent.blstats.x) != (y, x):
                 return
         items = [i for i in self.items_below_me
@@ -1698,7 +1805,15 @@ class Inventory:
         if not items:
             yield False
 
-        items = {i: pos for item, pos in items.items() for i in flatten_items([item])}
+        def expand(item, pos):
+            # a container left alone (CONTAINER_LOOP_FIX) offers only itself: its contents can't be taken out, and
+            # walking to them ping-ponged with the exploration for 3000 turns (base3-jf14 s0, dead there at 0.075)
+            if jf_config.CONTAINER_LOOP_FIX and item.is_container() and \
+                    (*level.key(), int(pos[0]), int(pos[1])) in self.multi_container_squares:
+                return [item]
+            return flatten_items([item])
+
+        items = {i: pos for item, pos in items.items() for i in expand(item, pos)}
 
         free_items = list(filter(lambda i: self._droppable(i), flatten_items(self.items)))
         forced_items = list(filter(lambda i: not self._droppable(i), flatten_items(self.items)))

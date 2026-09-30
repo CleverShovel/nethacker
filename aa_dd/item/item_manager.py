@@ -4,10 +4,10 @@ import re
 import nle.nethack as nh
 from nle.nethack import actions as A
 
-from autoascend import objects as O, utils
-from autoascend.character import Character
-from autoascend.glyph import MON
-from autoascend.item import Item
+from aa_dd import objects as O, utils
+from aa_dd.character import Character
+from aa_dd.glyph import MON
+from aa_dd.item import Item
 
 
 class ContainerContent:
@@ -261,10 +261,10 @@ class ItemManager:
             r'^(a|an|the|\d+)'
             r'( empty)?'
             r'( (cursed|uncursed|blessed))?'
-            r'( (very |thoroughly )?(rustproof|poisoned|corroded|rusty|burnt|rotted|partly eaten|partly used|diluted|unlocked|locked|moist|wet|greased))*'
+            r'( (very |thoroughly )?(rustproof|poisoned|corroded|rusty|burnt|rotted|partly eaten|partly used|diluted|unlocked|locked|wet|greased))*'
             r'( ([+-]\d+))? '
             r"([a-zA-z0-9-!'# ]+)"
-            r'( \((?:\d+ aum, )?([0-9]+:[0-9]+|no charge)\))?'   # '(20 aum, no charge)': a free glob in a shop
+            r'( \(([0-9]+:[0-9]+|no charge)\))?'
             r'( \(([a-zA-Z0-9; ]+(, flickering|, gleaming|, glimmering)?[a-zA-Z0-9; ]*)\))?'
             r'( \((for sale|unpaid), (\d+ aum, )?((\d+)[a-zA-Z- ]+|no charge)\))?'
             r'$',
@@ -285,9 +285,7 @@ class ItemManager:
         ) = matches[0]
         # TODO: effects, uses
 
-        # rings: a foocubus puts one on (s6 dive): an unparsed '(on right hand)' blinded the whole inventory
-        if info in {'being worn', 'being worn; slippery', 'wielded', 'chained to you',
-                    'on right hand', 'on left hand'} or info.startswith(
+        if info in {'being worn', 'being worn; slippery', 'wielded', 'chained to you'} or info.startswith(
                 'weapon in ') or \
                 info.startswith('tethered weapon in '):
             equipped = True
@@ -521,6 +519,8 @@ class ItemManager:
             name = 'eucalyptus leaf'
         elif name == 'pair of lenses':
             name = 'lenses'
+        elif name.startswith('set of ') and name.endswith(' dragon scales'):
+            name = name[len('set of '):]
         elif name.startswith('small glob'):
             name = name[len('small '):]
         elif name == 'knives':

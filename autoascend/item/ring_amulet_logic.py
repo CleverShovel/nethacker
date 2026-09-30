@@ -214,6 +214,9 @@ def shed_rings_amulets_when_hungry(self):
                 return False
             if i.is_unambiguous() and i.object == life_saving:
                 return False
+            from .scroll_identify import _always_wear
+            if _always_wear(i) and self.agent.blstats.hunger_state < Hunger.WEAK:
+                return False  # slow digestion & co: they save more than the 1/20 nutrition they cost
             return not _is_combat_only_item(i)
 
         candidate = next((i for i in self.items if sheddable(i)), None)
@@ -235,12 +238,57 @@ def shed_rings_amulets_when_hungry(self):
     yield False
 
 
+@utils.debug_log('inventory.wear_starting_rings')
+@Strategy.wrap
+def wear_starting_rings(self):
+    """Wear the rings the game started us with (see ring_amulet_config.STARTING_RINGS_WEAR) and keep
+    them on; a polymorph status takes them off again for good."""
+    agent = self.agent
+    if self._starting_ring_glyphs is None:  # snapshot once, from the first inventory of the game
+        self._starting_ring_glyphs = ({i.glyphs[0] for i in self.items if i.category == nh.RING_CLASS}
+                                      if agent.blstats.time <= 30 else set())
+    if not cfg.STARTING_RINGS_WEAR or not self._starting_ring_glyphs or not _allowed(self):
+        yield False
+
+    stuck = self._known_stuck_ring_amulet_glyphs
+    starting = [i for i in self.items if i.category == nh.RING_CLASS and i.glyphs[0] in self._starting_ring_glyphs
+                and not _is_combat_only_item(i)]
+
+    if agent.character.prop.polymorph:
+        worn = next((i for i in starting if i.equipped and i.glyphs[0] not in stuck), None)
+        if worn is not None:
+            yield True
+            _log(self, 'polymorph: starting rings off')
+            self._try_remove(worn)
+            return
+        self._starting_ring_glyphs = set()  # never wear them again this game
+        yield False
+
+    if agent.blstats.hunger_state >= Hunger.HUNGRY or agent.character.prop.blind:
+        yield False
+    if _hostile_within(self, cfg.AMULET_WEAR_SAFE_RADIUS):
+        yield False
+
+    candidate = next((i for i in starting if not i.equipped and i.glyphs[0] not in stuck
+                       and self._starting_ring_tries.get(i.glyphs[0], 0) < 2), None)
+    if candidate is None:
+        yield False
+
+    yield True
+    self._starting_ring_tries[candidate.glyphs[0]] = self._starting_ring_tries.get(candidate.glyphs[0], 0) + 1
+    self.put_on(candidate)
+
+
 def install(inventory_cls):
     """Attach the primitives and strategies to Inventory, add their per-episode state, and make a
     worn ring/amulet count as not droppable (NetHack won't drop a worn item, like armor)."""
-    for name, fn in (('put_on', put_on), ('remove_ring_or_amulet', remove_ring_or_amulet),
+    from . import scroll_identify as si
+    for name, fn in (('read_scrolls_to_identify', si.read_scrolls_to_identify),
+                     ('wear_identified_beneficial', si.wear_identified_beneficial),
+                     ('put_on', put_on), ('remove_ring_or_amulet', remove_ring_or_amulet),
                      ('_try_remove', _try_remove), ('identify_amulet_by_wear', identify_amulet_by_wear),
                      ('wear_combat_only_rings_amulets', wear_combat_only_rings_amulets),
+                     ('wear_starting_rings', wear_starting_rings),
                      ('shed_rings_amulets_when_hungry', shed_rings_amulets_when_hungry)):
         assert not hasattr(inventory_cls, name), f'{name} already defined on {inventory_cls}'
         setattr(inventory_cls, name, fn)
@@ -253,6 +301,10 @@ def install(inventory_cls):
         self._shed_for_hunger = set()
         self._known_stuck_ring_amulet_glyphs = set()
         self._tested_amulet_glyphs = set()
+        self._starting_ring_glyphs = None
+        self._starting_ring_tries = {}
+        self._last_scroll_read_turn = -10 ** 9
+        self._wear_benefit_tries = {}
 
     inventory_cls.__init__ = __init__
 

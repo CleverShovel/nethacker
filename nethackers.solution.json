@@ -1,6 +1,6 @@
 {
   "schema": "nethackers.solution/v1",
-  "name": "jawfish-s22-prayermodel-roles+ring-amulet",
+  "name": "jawfish-s22-prayermodel-roles+ring-scroll",
   "root": "autoascend",
   "parents": [
     "github.com/daglar-dragomirov/nethacker@5d0d455a1585271143aa47fbd5b44c2f6dae7d4b"

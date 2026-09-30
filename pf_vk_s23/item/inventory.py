@@ -7,16 +7,16 @@ import nle.nethack as nh
 import numpy as np
 from nle.nethack import actions as A
 
-from pf_v35 import objects as O, utils
-from pf_v35 import power
-from pf_v35.character import Character
-from pf_v35.exceptions import AgentPanic
-from pf_v35.glyph import G, MON, Hunger
-from pf_v35 import jf_config
-from pf_v35.item import ItemManager, Item, ContainerContent, check_if_triggered_container_trap, \
+from pf_vk_s23 import objects as O, utils
+from pf_vk_s23 import power
+from pf_vk_s23.character import Character
+from pf_vk_s23.exceptions import AgentPanic
+from pf_vk_s23.glyph import G, MON, Hunger
+from pf_vk_s23 import jf_config
+from pf_vk_s23.item import ItemManager, Item, ContainerContent, check_if_triggered_container_trap, \
     find_equivalent_item, flatten_items
-from pf_v35.item.inventory_items import InventoryItems
-from pf_v35.strategy import Strategy
+from pf_vk_s23.item.inventory_items import InventoryItems
+from pf_vk_s23.strategy import Strategy
 
 
 class Inventory:
@@ -1141,7 +1141,7 @@ class Inventory:
             yield False  # TODO: only for handless monsters (which cannot write)
 
         self.skip_engrave_counter -= 1
-        if self.agent.character.prop.blind or self.skip_engrave_counter > 0 or self.agent.hands_welded():
+        if self.agent.character.prop.blind or self.skip_engrave_counter > 0 or self.agent.no_free_hand():
             yield False
             return
         yielded = False
@@ -1233,6 +1233,8 @@ class Inventory:
 
     def _engrave_single_wand(self, item):
         """ Returns possible objects or None if current tile not suitable for identification."""
+        # WISH_TELEPORT_ROUTE: a wish prompt during the engrave-test comes from a wand of wishing (>= 2 wishes)
+        self.agent._last_wand_use_step = self.agent.step_count
 
         def msg():
             return self.agent.message

@@ -7,16 +7,16 @@ import nle.nethack as nh
 import numpy as np
 from nle.nethack import actions as A
 
-from pf_v35 import objects as O, utils
-from pf_v35 import power
-from pf_v35.character import Character
-from pf_v35.exceptions import AgentPanic
-from pf_v35.glyph import G, MON, Hunger
-from pf_v35 import jf_config
-from pf_v35.item import ItemManager, Item, ContainerContent, check_if_triggered_container_trap, \
+from pf_kef_d42161f import objects as O, utils
+from pf_kef_d42161f import power
+from pf_kef_d42161f.character import Character
+from pf_kef_d42161f.exceptions import AgentPanic
+from pf_kef_d42161f.glyph import G, MON, Hunger
+from pf_kef_d42161f import jf_config
+from pf_kef_d42161f.item import ItemManager, Item, ContainerContent, check_if_triggered_container_trap, \
     find_equivalent_item, flatten_items
-from pf_v35.item.inventory_items import InventoryItems
-from pf_v35.strategy import Strategy
+from pf_kef_d42161f.item.inventory_items import InventoryItems
+from pf_kef_d42161f.strategy import Strategy
 
 
 class Inventory:

@@ -941,12 +941,6 @@ class Inventory:
             self.pickup_and_drop_items()
                 .before(self.check_containers())
                 .before(self.wear_best_stuff())
-                .before(self.read_scrolls_to_identify())
-                .before(self.wear_identified_beneficial())
-                .before(self.wear_starting_rings())
-                .before(self.identify_amulet_by_wear())
-                .before(self.wear_combat_only_rings_amulets())
-                .before(self.shed_rings_amulets_when_hungry())
                 .before(self.wand_engrave_identify())
                 .before(self.use_spare_wishes())
                 .before(self.wear_life_saving())
@@ -1763,7 +1757,3 @@ class Inventory:
             yield False
 
         yield from self.arrange_items().strategy()
-
-
-from . import ring_amulet_logic as _ring_amulet_logic  # noqa: E402
-_ring_amulet_logic.install(Inventory)

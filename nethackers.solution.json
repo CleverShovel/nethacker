@@ -1,14 +1,13 @@
 {
   "schema": "nethackers.solution/v1",
-  "name": "jawfish+ring-scroll",
-  "root": "autoascend",
+  "name": "private-leader-69ba-samurai-start-rank+ring-scroll",
+  "root": ".",
   "parents": [
-    "github.com/Komershan/nethacker@7cd0e07a9dc9c2b7d0e2c5309fb96feb9dd2c215"
+    "github.com/alexeyshmelev/nethacker@43141c2eaac53525276efbba6b4e4084ff25bbec"
   ],
   "influences": [
-    "github.com/DT6A/nethacker@59ce30c509ef568366fe846afeba03dede939339",
-    "github.com/daglar-dragomirov/nethacker@cb527267cc6e3562ea8e02ccc09c90ff17fe8ccf",
-    "github.com/kenforthewin/nethack_astra@38b1a38b340d4cb154fe5e4411b2819dc407d5e3"
+    "github.com/daglar-dragomirov/nethacker@69baf4943e2f47a23715b3814438b180c3c64b75",
+    "github.com/daglar-dragomirov/nethacker@8ce023a8f681e7366d5f54ca419f314ac874ac59"
   ],
   "entrypoint": "bot.py"
 }

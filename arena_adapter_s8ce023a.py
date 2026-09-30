@@ -10,14 +10,14 @@ from collections.abc import Mapping
 from typing import Any
 
 import nle.nethack as nh
-from autoascend import agent as autoascend_agent
-from autoascend import jf_log
+from s8ce023a import agent as s8ce023a_agent
+from s8ce023a import jf_log
 
 _ACTIONS = tuple(nh.ACTIONS)
 _ACTION_TO_INDEX = {int(action): index for index, action in enumerate(_ACTIONS)}
 
 
-class AgentHang(autoascend_agent.AgentPanic):
+class AgentHang(s8ce023a_agent.AgentPanic):
     """Injected into an agent thread that stopped producing actions (a livelock)."""
 
 
@@ -61,11 +61,11 @@ class ArenaEnvAdapter:
 
     def step(self, action: Any) -> tuple[dict[str, Any], float, bool, dict[str, Any]]:
         if self._closed.is_set():
-            raise autoascend_agent.AgentFinished()
+            raise s8ce023a_agent.AgentFinished()
         self._actions.put(action)
         observation = self._observations.get()
         if observation is None or self._closed.is_set():
-            raise autoascend_agent.AgentFinished()
+            raise s8ce023a_agent.AgentFinished()
         return _copy_observation(observation), 0.0, False, {}
 
     def next_action_index(self, timeout: float) -> int:
@@ -125,21 +125,14 @@ class AutoAscendDriver:
         self._episode_start = time.monotonic()
         self._gave_up = False
         self._env: ArenaEnvAdapter | None = None
-        self._agent: autoascend_agent.Agent | None = None
+        self._agent: s8ce023a_agent.Agent | None = None
         self._thread: threading.Thread | None = None
         self._thread_error: str | None = None
         self._sent_first_action = False
         self._restarts = 0
-        self._fallback_action = _ACTION_TO_INDEX[int(autoascend_agent.A.Command.ESC)]
+        self._fallback_action = _ACTION_TO_INDEX[int(s8ce023a_agent.A.Command.ESC)]
 
     def reset(self, initial_observation: Mapping[str, Any]) -> None:
-        # the game's first message tells a full moon / Friday 13th (NetHack allmain.c:48-57): the base
-        # Luck of the prayer model (nhmodel/prayer.py); the agent itself never sees this observation
-        self._initial_message = None
-        try:
-            self._initial_message = bytes(initial_observation["message"]).split(b"\0")[0].decode("latin-1")
-        except Exception:  # noqa: BLE001
-            self._initial_message = None
         del initial_observation
         self.close()
         self._restarts = 0
@@ -152,26 +145,11 @@ class AutoAscendDriver:
         self._thread_error = None
         self._sent_first_action = False
         self._env = ArenaEnvAdapter()
-        self._agent = autoascend_agent.Agent(self._env, panic_on_errors=True)
+        self._agent = s8ce023a_agent.Agent(self._env, panic_on_errors=True)
         self._agent.resumed_game = not fresh_game
         if not fresh_game and previous is not None:
             self._agent.previous_character = previous.character
-        # the prayer state survives a restart: a fresh agent took the game for prayer-free and could pray
-        # again at once (pray.c: too soon -> Luck -3 and an angry god)
-        try:
-            if fresh_game:
-                if self._agent.prayer_model is not None:
-                    self._agent.prayer_model.initial_message(getattr(self, '_initial_message', None))
-            elif previous is not None:
-                self._agent.last_prayer_turn = previous.last_prayer_turn
-                self._agent.prayer_failed = previous.prayer_failed
-                self._agent.prayer_hold_until = previous.prayer_hold_until
-                if getattr(previous, 'prayer_model', None) is not None:
-                    previous.prayer_model.adopt(self._agent)
-                    self._agent.prayer_model = previous.prayer_model
-        except Exception:  # noqa: BLE001
-            pass
-        self._thread = threading.Thread(target=self._run_agent, args=(self._agent,), name="autoascend",
+        self._thread = threading.Thread(target=self._run_agent, args=(self._agent,), name="s8ce023a",
                                         daemon=True)
         self._thread.start()
 
@@ -245,10 +223,10 @@ class AutoAscendDriver:
     def thread_error(self) -> str | None:
         return self._thread_error
 
-    def _run_agent(self, agent: autoascend_agent.Agent) -> None:
+    def _run_agent(self, agent: s8ce023a_agent.Agent) -> None:
         try:
             agent.main()
-        except autoascend_agent.AgentFinished:
+        except s8ce023a_agent.AgentFinished:
             pass
         except BaseException:
             if agent is self._agent:

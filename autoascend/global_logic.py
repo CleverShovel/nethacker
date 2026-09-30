@@ -9,10 +9,8 @@ from . import soko_solver
 from . import utils
 from . import jf_config
 from . import power
-from . import castle_power
 from .character import Character
 from .dive_logic import DiveLogic
-from .kni_steed import SteedKeeper
 from .exceptions import AgentPanic
 from .glyph import Hunger, G, MON
 from .item import Item, flatten_items
@@ -76,14 +74,7 @@ class ItemPriority(ItemPriorityBase):
             if item is not None:
                 add_item(item)
 
-            # TOOL_KEEP_FIRST: the digging tool before the armor set (a splint mail pushed a pick-axe out)
             dive_ = getattr(self.agent.global_logic, 'dive', None)
-            if jf_config.TOOL_KEEP_FIRST and not allow_unknown_status and dive_ is not None and \
-                    dive_.keep_digging_tool():
-                tool = dive_.best_digging_tool(forced_items + items)
-                if tool is not None:
-                    add_item(tool)
-
             no_shield = dive_ is not None and dive_.mattock_digger()
             for item in self.agent.inventory.get_best_armorset(items=forced_items + items,
                                                                allow_unknown_status=allow_unknown_status):
@@ -222,12 +213,9 @@ class GlobalLogic:
         self.mines_not_found = False
 
         self.dive = DiveLogic(agent)
-        # Knight only (kni_steed.py): feed the saddled pony so hunger never turns it on us
-        self.steed = SteedKeeper(agent)
 
     def update(self):
         self.dive.update()
-        self.steed.update()
 
         if not self.agent.character.prop.hallu:
             if utils.isin(self.agent.glyphs, G.ORACLE).any():
@@ -382,14 +370,12 @@ class GlobalLogic:
     @Strategy.wrap
     def wait_out_unexpected_state_strategy(self):
         yielded = False
-        # CASTLE_POLY: on the castle a polymorph is the way over the moat (castle_power): keep acting in the form
-        castle_poly = lambda: jf_config.CASTLE_POLY and self.dive.castle.active()
         while (
                 self.agent.character.prop.blind or
                 self.agent.character.prop.confusion or
                 self.agent.character.prop.stun or
                 self.agent.character.prop.hallu or
-                (self.agent.character.prop.polymorph and not castle_poly())):
+                self.agent.character.prop.polymorph):
             if not yielded:
                 yield True
                 yielded = True
@@ -842,12 +828,16 @@ class GlobalLogic:
                 if jf_config.UPWARD_RETURN and self._pick_trip_done:
                     return True
                 cur = self.agent.current_level()
+                if jf_config.FALL_HOME and lv[0] == Level.DUNGEONS_OF_DOOM and \
+                        cur.dungeon_number == Level.DUNGEONS_OF_DOOM and self.agent.blstats.depth > lv[1]:
+                    return True
                 return bool(jf_config.GRIND_LEVELS) and lv[0] == Level.DUNGEONS_OF_DOOM and \
                     (cur.dungeon_number == Level.GNOMISH_MINES or self.agent.blstats.depth > lv[1])
             (
                 self.agent.exploration.go_to_level_strategy(*level, go_to_strategy, exploration_strategy(None))
                 .before(exploration_strategy(None))#.before(self.agent.exploration.patrol())
                 .preempt(self.agent, [
+                    self.read_mapping_home().condition(lambda: jf_config.FALL_HOME and homebound()),
                     exploration_strategy(0).condition(lambda: not homebound()),
                     exploration_strategy(None).until(
                         self.agent, lambda: self.agent.blstats.hitpoints >= 0.8 * self.agent.blstats.max_hitpoints)
@@ -857,6 +847,18 @@ class GlobalLogic:
                 ])
                 .until(self.agent, lambda: condition() or restart())
             ).run()
+
+    @Strategy.wrap
+    def read_mapping_home(self):
+        """FALL_HOME: on the way back up to the grind level, magic-map a level whose '<' isn't known yet."""
+        dive = self.dive
+        level = self.agent.current_level()
+        prop = self.agent.character.prop
+        if level.key() in dive._mapped or utils.isin(level.objects, G.STAIR_UP).any() or \
+                prop.blind or prop.confusion or prop.stun or prop.hallu or dive._mapping_scroll() is None:
+            yield False
+        yield True
+        dive.read_mapping()
 
     def global_strategy(self):
         return (
@@ -917,16 +919,7 @@ class GlobalLogic:
                 self.follow_guard(),
             ])
             .preempt(self.agent, [
-                # held by a bear trap: diagonal attempts free us 5x faster (jf_config.BEARTRAP_ESCAPE)
-                self.agent.escape_bear_trap(),
-            ])
-            .preempt(self.agent, [
                 self.agent.fight2(),
-            ])
-            # Knight only: throw the kit's apples/carrots to the pony before hunger confuses it into
-            # attacking us (dogmove.c dog_hunger / mfndpos ALLOW_U); no-op for every other role
-            .preempt(self.agent, [
-                self.steed.strategy(),
             ])
             # the Valley of the Dead only (GEHENNOM_DIVE): walk past the graveyards' sleeping undead
             .preempt(self.agent, [
@@ -935,8 +928,6 @@ class GlobalLogic:
             # an Overloaded were form can neither fight nor eat: drop its load first (LYCAN_FIXES)
             .preempt(self.agent, [
                 self.agent.were_unload().condition(lambda: jf_config.LYCAN_FIXES),
-                # a hold that is over must not leave us standing on its Elbereth (see wipe_hold_elbereth)
-                self.dive.wipe_hold_elbereth().condition(lambda: jf_config.HOLD_LOOP),
             ])
             .preempt(self.agent, [
                 self.dive.faint_shelter(),
@@ -964,15 +955,6 @@ class GlobalLogic:
             # Gehennom only (GEHENNOM_DIVE): a wand of digging down away from a monster we can't outfight
             .preempt(self.agent, [
                 self.dive.gehennom_escape(),
-            ])
-            # Gehennom only (GEHENNOM_SCARE): drop a scroll of scare monster and hold on it (dig from it / rest on
-            # it) -- above the Valley retreat: no castle round trip while a scroll lasts
-            .preempt(self.agent, [
-                self.dive.gehennom_scare(),
-            ])
-            # power (CASTLE_POLY): depth 25+ on the main line, losing a fight -> a wand of polymorph at ourselves
-            .preempt(self.agent, [
-                castle_power.deep_poly_escape_strategy(self.dive),
             ])
             # crossing the castle moat (castle_logic.py): above the survival layer and the fight, which
             # would drag a levitating hero back to land or up the stairs

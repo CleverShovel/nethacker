@@ -56,7 +56,6 @@ class Inventory:
         self.multi_container_squares = set()  # (dungeon, level, y, x) where #loot asks 'Loot which containers?'
         self._container_failures = {}         # (dungeon, level, y, x) -> failed use_container attempts
         self.unreachable_items_until = {}     # (dungeon, level, y, x) -> turn: items at a pit bottom out of reach
-        self._buy_food_blocked = {}           # (dungeon, level, y, x) -> (failed walks, skip until turn): BUY_FOOD_GIVEUP
 
     def is_known_empty(self, item):
         return item.text in self.empty_wands
@@ -84,15 +83,14 @@ class Inventory:
 
     def dropped_here(self, item, pos=None):
         """A scroll that may be scare monster which we dropped on this square: never pick it up again."""
-        # (the set is filled only by SCARE_KEEP drops and by castle_power's arrival drill)
-        if not self.dropped_scrolls or not power.is_scare_candidate(item):
+        if not jf_config.SCARE_KEEP or not power.is_scare_candidate(item):
             return False
         pos = pos if pos is not None else (self.agent.blstats.y, self.agent.blstats.x)
         return (self.agent.current_level().key(), (int(pos[0]), int(pos[1])), self._scroll_key(item)) in \
             self.dropped_scrolls
 
-    def _note_dropped(self, items, counts, force=False):
-        if not (jf_config.SCARE_KEEP or force):
+    def _note_dropped(self, items, counts):
+        if not jf_config.SCARE_KEEP:
             return
         here = (self.agent.current_level().key(), (int(self.agent.blstats.y), int(self.agent.blstats.x)))
         for item, count in zip(items, counts):
@@ -1418,13 +1416,7 @@ class Inventory:
         if not mask.any():
             yield False
 
-        key = self.agent.current_level().key()
         for y, x in zip(*mask.nonzero()):
-            # squares whose containers are left alone (several containers; CONTAINER_LOOP_FIX failures): check_containers
-            # skips them, so walking there only ping-pongs with the exploration
-            if jf_config.CONTAINER_LOOP_FIX and (*key, int(y), int(x)) in self.multi_container_squares:
-                mask[y, x] = False
-                continue
             for item in self.agent.current_level().items[y, x]:
                 if not item.is_possible_container():
                     mask[y, x] = False
@@ -1464,6 +1456,10 @@ class Inventory:
                     yield True
                 if item.is_chest() and not (item.is_unambiguous() and item.object.name == 'ice box'):
                     fail_msg = self.agent.untrap_container_below_me()
+                    if fail_msg == 'trapped':
+                        # a found trap is left alone: so are this square's containers from now on
+                        self.multi_container_squares.add(self._here())
+                        continue
                     if fail_msg is not None and check_if_triggered_container_trap(fail_msg):
                         raise AgentPanic('triggered trap while looting')
                 self.check_container_content(item)
@@ -1656,30 +1652,15 @@ class Inventory:
         if self.carried_nutrition() >= jf_config.BUY_FOOD_UNTIL or agent._carries_digging_tool() or \
                 agent.get_visible_monsters():
             yield False
-        if jf_config.SHOP_GUARD and agent.character.teleportitis and not agent.character.teleport_control:
-            # a random teleport between the pickup and the payment takes the goods out unpaid: Kops and an
-            # angry shopkeeper (base4-jf14 s10, dead)
-            yield False
         dis = agent.bfs()
         target = self._food_for_sale(dis)
         if target is None:
             yield False
         _, y, x, name, price = target
-        key = (level.dungeon_number, level.level_number, y, x)
-        if jf_config.BUY_FOOD_GIVEUP and self._buy_food_blocked.get(key, (0, -1))[1] > bl.time:
-            yield False
         yield True
         if (bl.y, bl.x) != (y, x):
             # walk there and buy in one go (between every(3) turns check_items walked us off the square again)
-            try:
-                agent.go_to(y, x)
-            finally:
-                # BUY_FOOD_GIVEUP: a shopkeeper standing in the path panicked every go_to ('Monster on a next
-                # tile'), and the tour walked back between two tries: base4-jf14 s6 went N/S ~660 times per
-                # 500 turns for 1500 turns on its Dlvl-2 grind. After 3 failed walks, leave that item alone.
-                if jf_config.BUY_FOOD_GIVEUP and (agent.blstats.y, agent.blstats.x) != (y, x):
-                    fails = self._buy_food_blocked.get(key, (0, -1))[0] + 1
-                    self._buy_food_blocked[key] = (fails, agent.blstats.time + 2000 if fails >= 3 else -1)
+            agent.go_to(y, x)
             if (agent.blstats.y, agent.blstats.x) != (y, x):
                 return
         items = [i for i in self.items_below_me
@@ -1717,15 +1698,7 @@ class Inventory:
         if not items:
             yield False
 
-        def expand(item, pos):
-            # a container left alone (CONTAINER_LOOP_FIX) offers only itself: its contents can't be taken out, and
-            # walking to them ping-ponged with the exploration for 3000 turns (base3-jf14 s0, dead there at 0.075)
-            if jf_config.CONTAINER_LOOP_FIX and item.is_container() and \
-                    (*level.key(), int(pos[0]), int(pos[1])) in self.multi_container_squares:
-                return [item]
-            return flatten_items([item])
-
-        items = {i: pos for item, pos in items.items() for i in expand(item, pos)}
+        items = {i: pos for item, pos in items.items() for i in flatten_items([item])}
 
         free_items = list(filter(lambda i: self._droppable(i), flatten_items(self.items)))
         forced_items = list(filter(lambda i: not self._droppable(i), flatten_items(self.items)))

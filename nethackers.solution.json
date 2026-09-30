@@ -1,24 +1,19 @@
 {
   "schema": "nethackers.solution/v1",
-  "name": "jawfish-dd-router+ring-scroll",
+  "name": "jawfish-s22-prayermodel-arcdig+ring-scroll",
   "root": "autoascend",
   "parents": [
-    "github.com/artfawl/nethacker@9f41c5e6883c415ff0522b5635215363f52939c4"
+    "github.com/PetrAnokhin/nethacker@5c1186c8051ca8a885b79216d8dde7aa13e28594"
   ],
   "influences": [
-    "github.com/DT6A/nethacker@464e1662a4cb60567c7946d2d952278c64eefe84",
     "github.com/DT6A/nethacker@59ce30c509ef568366fe846afeba03dede939339",
-    "github.com/DT6A/nethacker@d956abff7baa169d549a8d12fa1d219412833b67",
-    "github.com/DT6A/nethacker@e3f389bb4f52bbb99f8c33d39ecb291537f563ab",
-    "github.com/Komershan/nethacker@132b7c2d662f40bf7f86335c98709025b8b23967",
-    "github.com/Komershan/nethacker@5deb412e988e8b8e99ad225bd69f2de86c0c63fd",
-    "github.com/Komershan/nethacker@8e0e320501ad2b70f8d912e3e555d4f1e59f786e",
-    "github.com/Komershan/nethacker@d3d40a676a096d118023e220853c2a0a8f3091fd",
+    "github.com/daglar-dragomirov/nethacker@14626734f3d8a0702b52e67996ba86b57ef0b852",
+    "github.com/daglar-dragomirov/nethacker@c131c7c377fc36b84b2c969aee4b40ff9ec6e653",
     "github.com/daglar-dragomirov/nethacker@cb527267cc6e3562ea8e02ccc09c90ff17fe8ccf",
-    "github.com/eL1fe/nethacker@dc2765b9a90074e2823521afb721b7ee16ef35a7",
-    "github.com/eL1fe/nethacker@ff8e49187df304cbd0ad2bbbe8109feb19e48e0b",
+    "github.com/kefirski/nethacker@5b7f1ebb452945da5d76862ce21d8b1a0053c0f5",
+    "github.com/kefirski/nethacker@91cc604d54aec632e67f8f21680319ac7e77a2fd",
     "github.com/kenforthewin/nethack_astra@38b1a38b340d4cb154fe5e4411b2819dc407d5e3",
-    "github.com/vkurenkov/nethacker@ef6acf87e265f74600b914060f620d06117070a3"
+    "github.com/vkurenkov/nethacker@f15bb8c8e01d905d1946e32bfd2558e17394eab6"
   ],
   "entrypoint": "bot.py"
 }

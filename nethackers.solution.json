@@ -1,27 +1,13 @@
 {
   "schema": "nethackers.solution/v1",
-  "name": "daglar-identity-portfolio+ring-scroll-g",
-  "root": "pf_kef_d42161f",
+  "name": "private-leader-69ba-samurai-start-rank+ring-scroll-g",
+  "root": ".",
   "parents": [
-    "github.com/daglar-dragomirov/nethacker@9bba0af447c08e218a8f0886a9f0237b59417c3c"
+    "github.com/alexeyshmelev/nethacker@43141c2eaac53525276efbba6b4e4084ff25bbec"
   ],
   "influences": [
-    "github.com/DT6A/nethacker@59ce30c509ef568366fe846afeba03dede939339",
-    "github.com/DT6A/nethacker@d956abff7baa169d549a8d12fa1d219412833b67",
-    "github.com/Komershan/nethacker@ddfd58642853498954a79134e525b98a5e248fbb",
-    "github.com/daglar-dragomirov/nethacker@14626734f3d8a0702b52e67996ba86b57ef0b852",
-    "github.com/daglar-dragomirov/nethacker@5d0d455a1585271143aa47fbd5b44c2f6dae7d4b",
-    "github.com/daglar-dragomirov/nethacker@8ce023a",
-    "github.com/daglar-dragomirov/nethacker@c131c7c377fc36b84b2c969aee4b40ff9ec6e653",
-    "github.com/daglar-dragomirov/nethacker@cb527267cc6e3562ea8e02ccc09c90ff17fe8ccf",
-    "github.com/kefirski/nethacker@314507ee72fcedf3749b6e2b4d60330bc159e88f",
-    "github.com/kefirski/nethacker@44e1e586cf4c6707b72b8d5238cb34311b615a01",
-    "github.com/kefirski/nethacker@5b7f1ebb452945da5d76862ce21d8b1a0053c0f5",
-    "github.com/kefirski/nethacker@91cc604d54aec632e67f8f21680319ac7e77a2fd",
-    "github.com/kenforthewin/nethack_astra@38b1a38b340d4cb154fe5e4411b2819dc407d5e3",
-    "github.com/vkurenkov/nethacker@21e65391b70273f5c9c7e1b4df614a880da64cf1",
-    "github.com/vkurenkov/nethacker@ef6acf87e265f74600b914060f620d06117070a3",
-    "github.com/vkurenkov/nethacker@f15bb8c8e01d905d1946e32bfd2558e17394eab6"
+    "github.com/daglar-dragomirov/nethacker@69baf4943e2f47a23715b3814438b180c3c64b75",
+    "github.com/daglar-dragomirov/nethacker@8ce023a8f681e7366d5f54ca419f314ac874ac59"
   ],
   "entrypoint": "bot.py"
 }

@@ -1,13 +1,46 @@
 {
   "schema": "nethackers.solution/v1",
-  "name": "private-leader-69ba-samurai-start-rank+ring-scroll-g",
-  "root": ".",
+  "name": "daglar-identity-portfolio+ring-scroll-g",
+  "root": "pf_s25p8",
   "parents": [
-    "github.com/alexeyshmelev/nethacker@43141c2eaac53525276efbba6b4e4084ff25bbec"
+    "github.com/daglar-dragomirov/nethacker@b676c23a021a7ca8e977799c462b8a1499b17663"
   ],
   "influences": [
-    "github.com/daglar-dragomirov/nethacker@69baf4943e2f47a23715b3814438b180c3c64b75",
-    "github.com/daglar-dragomirov/nethacker@8ce023a8f681e7366d5f54ca419f314ac874ac59"
+    "github.com/DT6A/nethacker@464e1662a4cb60567c7946d2d952278c64eefe84",
+    "github.com/DT6A/nethacker@59ce30c509ef568366fe846afeba03dede939339",
+    "github.com/DT6A/nethacker@d956abff7baa169d549a8d12fa1d219412833b67",
+    "github.com/DT6A/nethacker@e3f389bb4f52bbb99f8c33d39ecb291537f563ab",
+    "github.com/Komershan/nethacker@132b7c2d662f40bf7f86335c98709025b8b23967",
+    "github.com/Komershan/nethacker@5520db0a6f9ffbcd64c19443bf71746d7c403b69",
+    "github.com/Komershan/nethacker@5deb412e988e8b8e99ad225bd69f2de86c0c63fd",
+    "github.com/Komershan/nethacker@615e07b020a5866e5016b9b1f4c0514ac93edf8b",
+    "github.com/Komershan/nethacker@8e0e320501ad2b70f8d912e3e555d4f1e59f786e",
+    "github.com/Komershan/nethacker@9b873ea540374801fedb78242e51287811dc3290",
+    "github.com/Komershan/nethacker@ddfd58642853498954a79134e525b98a5e248fbb",
+    "github.com/PetrAnokhin/nethacker@5c1186c8051ca8a885b79216d8dde7aa13e28594",
+    "github.com/alexeyshmelev/nethacker@bd7e2c1a98bdfe34ace3b268ec8cb978a1253db3",
+    "github.com/daglar-dragomirov/nethacker@14626734f3d8a0702b52e67996ba86b57ef0b852",
+    "github.com/daglar-dragomirov/nethacker@5d0d455a1585271143aa47fbd5b44c2f6dae7d4b",
+    "github.com/daglar-dragomirov/nethacker@8ce023a8f681e7366d5f54ca419f314ac874ac59",
+    "github.com/daglar-dragomirov/nethacker@c131c7c377fc36b84b2c969aee4b40ff9ec6e653",
+    "github.com/daglar-dragomirov/nethacker@cb527267cc6e3562ea8e02ccc09c90ff17fe8ccf",
+    "github.com/daglar-dragomirov/nethacker@e29eb8281b13784716d9121e4f01ec60c2bb2165",
+    "github.com/eL1fe/nethacker@012dce4eef00fb92e814e2aa5a405c1eed015e96",
+    "github.com/eL1fe/nethacker@dc2765b9a90074e2823521afb721b7ee16ef35a7",
+    "github.com/eL1fe/nethacker@f68e24e8dbe0b014f21c2d34858d1a98f6c8da0a",
+    "github.com/eL1fe/nethacker@ff8e49187df304cbd0ad2bbbe8109feb19e48e0b",
+    "github.com/kefirski/nethacker@314507ee72fcedf3749b6e2b4d60330bc159e88f",
+    "github.com/kefirski/nethacker@44e1e586cf4c6707b72b8d5238cb34311b615a01",
+    "github.com/kefirski/nethacker@5b7f1ebb452945da5d76862ce21d8b1a0053c0f5",
+    "github.com/kefirski/nethacker@91cc604d54aec632e67f8f21680319ac7e77a2fd",
+    "github.com/kenforthewin/nethack_astra@38b1a38b340d4cb154fe5e4411b2819dc407d5e3",
+    "github.com/vkurenkov/nethacker@21e65391b70273f5c9c7e1b4df614a880da64cf1",
+    "github.com/vkurenkov/nethacker@238c254960fae35dbb3c8de7922da7f705875c41",
+    "github.com/vkurenkov/nethacker@ef6acf87e265f74600b914060f620d06117070a3",
+    "github.com/vkurenkov/nethacker@f15bb8c8e01d905d1946e32bfd2558e17394eab6",
+    "github.com/vlomshakov/nethacker@21db872529ff794a3daf14174f20fe92b2a2b2cf",
+    "github.com/vlomshakov/nethacker@8b492ce95e6988b0eae2de84aef1379f885a1306",
+    "github.com/vlomshakov/nethacker@9ef4063cf36fa1d26416d11e83ef7fb1575e9ada"
   ],
   "entrypoint": "bot.py"
 }

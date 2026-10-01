@@ -828,12 +828,16 @@ class GlobalLogic:
                 if jf_config.UPWARD_RETURN and self._pick_trip_done:
                     return True
                 cur = self.agent.current_level()
+                if jf_config.FALL_HOME and lv[0] == Level.DUNGEONS_OF_DOOM and \
+                        cur.dungeon_number == Level.DUNGEONS_OF_DOOM and self.agent.blstats.depth > lv[1]:
+                    return True
                 return bool(jf_config.GRIND_LEVELS) and lv[0] == Level.DUNGEONS_OF_DOOM and \
                     (cur.dungeon_number == Level.GNOMISH_MINES or self.agent.blstats.depth > lv[1])
             (
                 self.agent.exploration.go_to_level_strategy(*level, go_to_strategy, exploration_strategy(None))
                 .before(exploration_strategy(None))#.before(self.agent.exploration.patrol())
                 .preempt(self.agent, [
+                    self.read_mapping_home().condition(lambda: jf_config.FALL_HOME and homebound()),
                     exploration_strategy(0).condition(lambda: not homebound()),
                     exploration_strategy(None).until(
                         self.agent, lambda: self.agent.blstats.hitpoints >= 0.8 * self.agent.blstats.max_hitpoints)
@@ -843,6 +847,18 @@ class GlobalLogic:
                 ])
                 .until(self.agent, lambda: condition() or restart())
             ).run()
+
+    @Strategy.wrap
+    def read_mapping_home(self):
+        """FALL_HOME: on the way back up to the grind level, magic-map a level whose '<' isn't known yet."""
+        dive = self.dive
+        level = self.agent.current_level()
+        prop = self.agent.character.prop
+        if level.key() in dive._mapped or utils.isin(level.objects, G.STAIR_UP).any() or \
+                prop.blind or prop.confusion or prop.stun or prop.hallu or dive._mapping_scroll() is None:
+            yield False
+        yield True
+        dive.read_mapping()
 
     def global_strategy(self):
         return (

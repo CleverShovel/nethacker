@@ -300,6 +300,48 @@ def wait_action(agent, monsters):
     return []
 
 
+def camera_actions(agent, monsters):
+    """hypothesis: a Tourist's expensive camera (~60-90 charges, unused so far) blinds an adjacent monster and makes
+    it flee 3 times in 4 (apply.c use_camera -> flash_hits_mon); flashing attackers at low HP beats trading
+    blows at 3/14 HP, which is how most Dlvl 1-3 Tourist games end (sewer rats, hobbits, ants). Only while
+    diving: in the levelling grind a fleeing monster is lost XP."""
+    if agent.character.prop.blind or agent.character.prop.polymorph or agent.blstats.max_hitpoints <= 0:
+        return []
+    camera = None
+    for item in agent.inventory.items:
+        if item.is_unambiguous() and item.object.name == 'expensive camera' and \
+                not agent.inventory.is_known_empty(item):
+            camera = item
+            break
+    if camera is None:
+        return []
+    ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
+    if not agent.global_logic.dive.diving or ratio >= 0.5:
+        return []
+    flashed = getattr(agent, '_camera_flashed', {})
+    # hypothesis: the flash undoes the Elbereth the dive stands on: a blinded monster no longer respects it
+    # (monmove.c onscary), and attacking from the square wipes it ('You feel like a hypocrite. The engraving
+    # beneath you fades': fem s5 at Dlvl 12, then a crowd of iguanas, ants and a centaur killed the digger).
+    # Leave Elbereth-respecting neighbours alone while it holds; flash only the ones that fight through it.
+    # sources: https://nethackwiki.com/wiki/Elbereth, https://nethackwiki.com/wiki/Expensive_camera,
+    # https://nethackwiki.com/wiki/Tourist, /refs/top/1c4099e80253 (_melee_ignores_elbereth, AT_ELBERETH_FIX)
+    on_elbereth = (agent.inventory.engraving_below_me or '').lower() == 'elbereth' and not in_gehennom(agent)
+    dive = agent.global_logic.dive
+    actions = []
+    for monster in monsters:
+        _, y, x, mon, _ = monster
+        if not adjacent((y, x), (agent.blstats.y, agent.blstats.x)):
+            continue
+        if on_elbereth and not dive._melee_ignores_elbereth(mon):
+            continue
+        if getattr(mon, 'mflags1', 0) & 0x00001000:  # M1_NOEYES
+            continue
+        if agent.blstats.time - flashed.get((y, x), -100) < 8:
+            continue
+        actions.append((25 + 20 * (1 - ratio), ('camera', y - agent.blstats.y, x - agent.blstats.x, camera)))
+    return actions
+
+
 def get_available_actions(agent, monsters):
     actions = []
 
@@ -342,6 +384,7 @@ def get_available_actions(agent, monsters):
     if to_pickup:
         actions.append((15, ('pickup', to_pickup)))
 
+    actions.extend(camera_actions(agent, monsters))
     actions.extend(elbereth_action(agent, monsters))
     actions.extend(wait_action(agent, monsters))
 

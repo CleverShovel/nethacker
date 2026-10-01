@@ -1,0 +1,32 @@
+[
+  {
+    "trajectory_id": 3,
+    "status": "completed",
+    "progress": 0.036887590648350246,
+    "ascended": false,
+    "steps": 13199,
+    "turns": 11035,
+    "max_depth": 1,
+    "end_status": "1",
+    "error": null,
+    "wall_seconds": 36.297475,
+    "character": "val-dwa-law-fem",
+    "milestone": "Xp:6",
+    "cause_of_death": "killed by a contaminated potion"
+  },
+  {
+    "trajectory_id": 4,
+    "status": "completed",
+    "progress": 0.0507583712345433,
+    "ascended": false,
+    "steps": 38277,
+    "turns": 20329,
+    "max_depth": 1,
+    "end_status": "1",
+    "error": null,
+    "wall_seconds": 76.119738,
+    "character": "val-dwa-law-fem",
+    "milestone": "Xp:7",
+    "cause_of_death": "killed by a rothe"
+  }
+]

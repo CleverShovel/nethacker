@@ -54,7 +54,9 @@ FAINT_SHELTER = False
 # FAINT_PRAYER_GAP_LONG (= the Weak rule's gap), or STARVE_MARGIN turns before that deadline whatever
 # the gap (the fixed 1000-turn gap could starve a character whose last prayer was an HP one, and it
 # prays where rnz(350) still fails ~5.5% of the time; ~2.3% at 1200).
-STARVE_CLOCK = False
+# hypothesis: Tourists (weak, often Fainting in the grind; seed 6 starved) survive longer when the Fainting
+# prayer follows eat.c's starvation deadline instead of a fixed 1100-turn gap (local: 0.248 -> 0.259)
+STARVE_CLOCK = True
 # give up looking for the Mines entrance after this many turns and go on to Sokoban (0: never)
 MINES_SEARCH_TURNS = 3500
 # buy food in shops (never while carrying a digging tool) until carrying BUY_FOOD_UNTIL nutrition
@@ -76,6 +78,16 @@ PICK_TRIP_END_XL = 0
 # only: after its trip, pt6-public seed 9 fell through a trap door to Dlvl 4, took that level's unexplored
 # '>' to Dlvl 5 and met soldier ants at XL 7 (the old rule takes any unexplored staircase, 50/50)
 UPWARD_RETURN = False
+# hypothesis: a trap door on Dlvl 1 drops the XL 1-3 grind a few levels (fem s1 fell to Dlvl 3 at T7), and the
+# tour then explores each of those levels to exhaustion on its way back -- items, every unexplored staircase --
+# at 10-20 HP among monsters generated for their depth (s1: killed by a hobbit at T395, 0.018). Fallen below
+# the grind level in the main dungeon, head straight home: explore for '<' only (as UPWARD_RETURN does) and
+# read one of the Tourist's 4 identified scrolls of magic mapping on a level whose '<' isn't known, so the
+# walk to it replaces the search (measured: s5 0.021 -> 0.206, s9 0.554 -> 0.507; s1 gets home by T252 but
+# still dies on Dlvl 1)
+# sources: https://nethackwiki.com/wiki/Trap_door, https://nethackwiki.com/wiki/Scroll_of_magic_mapping,
+#          https://nethackwiki.com/wiki/Tourist, /refs/top/1c4099e80253 (explore until the stairs appear)
+FALL_HOME = True
 # from this XL the Dlvl 1 grind moves to Dlvl GRIND_DEEP_LEVEL (0: never)
 GRIND_DEEP_XL = 0
 GRIND_DEEP_LEVEL = 3
@@ -114,7 +126,9 @@ ENGULF_WIELD = False
 DIVE_EAT = False
 DIVE_EAT_RADIUS = 8
 # LAST_RESORT: a known wand of digging is zapped down first (an escape that also banks a level)
-LAST_RESORT_DIG = False
+# hypothesis: letting the last-resort escape dig down (when HP is critical, prayer isn't safe and a
+# hostile is adjacent) saves deep Tourists that otherwise die cornered (local fem seed 14 0.353->0.554)
+LAST_RESORT_DIG = True
 # LAST_RESORT: pray at critical HP beside a hostile once this many turns have passed since the last prayer
 # (0: off; the ordinary low-HP prayer waits 500)
 DESPERATE_PRAYER_GAP = 0
@@ -222,7 +236,9 @@ SESSILE_MEMORY = False
 GOTO_TARGET_FIX = False
 # the panic-loop breaker closes a square for 100 turns, not for the rest of the game (the failing moves are
 # usually ours: a bear trap, a web; a permanent forbid boxed a Mines dive in for 5000+ turns)
-TEMP_FORBID = False
+# hypothesis: a permanent forbid walls the grind/dive into a pocket for thousands of turns (starving, praying
+# on Dlvl 1); expiring it after 100 turns lets the bot leave and reach deeper milestones
+TEMP_FORBID = True
 # boxed in by diagonal squeezes while carrying > 600: drop to 550 for a while (a corridor bend held a grind 8000 turns)
 UNSQUEEZE = False
 # after 3 failed use_container attempts on a floor container, leave that square's containers alone (a take-out
@@ -274,7 +290,9 @@ FEYE_FIX = False
 DEMON_NO_REDIP = False
 # the last resort (unknown wands/potions/scrolls) yields to the Elbereth rest while everything close respects
 # Elbereth and we are on one or can engrave (a zap erased it, a bounced ray / potion of sickness killed at 2-3 HP)
-LR_ELBERETH = False
+# hypothesis: preserve usable Elbereth protection against susceptible enemies
+# instead of erasing it with an unknown wand or drinking a harmful potion.
+LR_ELBERETH = True
 
 # Never dig or zap digging down on a staircase (rescue agent, 78a30e1; ported by hand for train 2): the square
 # under '@' is unknown on arrival, so _diggable_spot took the arrival '<' for floor, and a wand of digging

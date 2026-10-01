@@ -29,6 +29,9 @@ BLStats = namedtuple('BLStats',
                      'x y strength_percentage strength dexterity constitution intelligence wisdom charisma score hitpoints max_hitpoints depth gold energy max_energy armor_class monster_level experience_level experience_points time hunger_state carrying_capacity dungeon_number level_number prop_mask alignment')
 
 
+GRIND_DESPERATE_PRAYER_GAP = 200
+
+
 class Agent:
     def __init__(self, env, seed=0, verbose=False, panic_on_errors=False):
         self.env = env
@@ -942,7 +945,26 @@ class Agent:
                 return True
             return False
 
+    def _disarm_is_safe(self):
+        # trap.c: the disarm succeeds when rnd(75 + level_difficulty() / 2) <= Dex + XL (doubled for Rogues)
+        ch = self.blstats.dexterity + self.blstats.experience_level
+        if self.character.role == Character.ROGUE:
+            ch *= 2
+        return ch >= 75 + self.blstats.depth // 2
+
     def untrap_container_below_me(self):
+        """ Return None if the container is (probably) safe, 'trapped' if a trap was found and left
+        alone, else the fail message """
+        # re-check only while a trap could kill us (explosion 6d6 <= 36): every check costs a turn
+        checks = 5 if self.blstats.hitpoints <= 36 else 1
+        for _ in range(checks - 1):
+            result = self._untrap_container_below_me_once()
+            if result != 'recheck':
+                return result
+        result = self._untrap_container_below_me_once()
+        return None if result == 'recheck' else result
+
+    def _untrap_container_below_me_once(self):
         """ Return None if succesfull else fail message """
         with self.atom_operation():
             self.type_text('#u')
@@ -964,8 +986,18 @@ class Agent:
             assert 'Check it for traps?' in self.single_message, self.single_message
             self.type_text('y')
             if self.message.startswith('You find no traps on the'):
-                return
+                # hypothesis: one check finds a chest trap only 10/(31 - XL) of the time (1/3 at XL 1),
+                # and a found trap's disarm fails unless d(75 + depth/2) <= Dex + XL (~1 in 5 early),
+                # setting it off (4d4 shock, 6d6 explosion, poison: 'killed by an electric shock' at
+                # XL 3, 10-HP Tourists). Re-checking several times and leaving a found trap alone
+                # (nethackwiki's advice) turns those deaths into skipped boxes.
+                # sources: https://nethackwiki.com/wiki/Container_trap, NetHack 3.6.6 src/trap.c untrap(),
+                #   https://nethackwiki.com/wiki/Tourist
+                return 'recheck'
             assert 'Disarm it?' in self.message, self.message
+            if not self._disarm_is_safe():
+                self.type_text('n')
+                return 'trapped'
             self.type_text('y')
             if 'You disarm it!' in self.message:
                 self.stats_logger.log_event('container_untrap_success')
@@ -2036,6 +2068,27 @@ class Agent:
                 self.zap(wand, dir)
             return wait_counter
 
+        elif best_action[0] == 'camera':
+            _, dy, dx, camera = best_action
+            if not hasattr(self, '_camera_flashed'):
+                self._camera_flashed = {}
+            self._camera_flashed[(self.blstats.y + dy, self.blstats.x + dx)] = self.blstats.time
+            dir = self.calc_direction(self.blstats.y, self.blstats.x, self.blstats.y + dy, self.blstats.x + dx)
+            pass
+            with self.atom_operation():
+                self.step(A.Command.APPLY)
+                self.type_text(self.inventory.items.get_letter(camera))
+                if 'In what direction' in self.message:
+                    self.direction(dir)
+                    self.log(f'CAMERA flash {dy},{dx}: {self.message!r}')
+                else:
+                    self.log(f'CAMERA no prompt: {self.message!r}')
+                    if 'nothing happens' in self.message.lower():
+                        self.inventory.empty_wands.add(camera.text)
+                    if 'What do you want to use or apply' in self.single_message:
+                        self.step(A.Command.ESC)
+            return wait_counter
+
         elif best_action[0] == 'pickup':
             if len(best_action) == 2:
                 _, items_to_pickup = best_action
@@ -2379,6 +2432,16 @@ class Agent:
                 not poly_buffer:
             y, x = self.blstats.y, self.blstats.x
             adjacent = [m for m in self.get_visible_monsters() if utils.adjacent((m[1], m[2]), (y, x))]
+            # hypothesis: most Tourist games end in the levelling grind at XL 1-3, at critical HP beside a rat or
+            # hobbit, on an Elbereth rest that the dust scuffs; the last prayer is 200-500 turns old there and
+            # rnz(350) has run out more often than not -- a failed prayer costs less than the game
+            if adjacent and GRIND_DESPERATE_PRAYER_GAP and not self.global_logic.dive.diving and \
+                    not self.prayer_failed and self.current_level().dungeon_number != 1 and \
+                    self.is_safe_to_pray(GRIND_DESPERATE_PRAYER_GAP):
+                yield True
+                self.log('LAST RESORT: grind desperate prayer')
+                self.pray()
+                return
             # LR_ELBERETH: with every monster close by respecting Elbereth, the Elbereth rest (below us) is the
             # safer answer: a scared monster doesn't melee, while a zap from the square erases it ('You feel
             # like a hypocrite') and an unknown ray can bounce back (base2-jf25 s1: a wand of cold at an adjacent

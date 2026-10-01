@@ -32,10 +32,29 @@ def _log(inv, what):
           file=sys.stderr, flush=True)
 
 
-def scroll_odds(candidates):
-    """{scroll name: probability} over the still possible scroll objects, weighted by generation probability."""
-    total = sum(o.prob for o in candidates)
-    return {o.name: o.prob / total for o in candidates} if total else {}
+def _screen(agent, limit=900):
+    """The non-empty rows of the terminal, for the stderr diagnostics of a read that identified nothing."""
+    rows = [bytes(r).decode(errors='replace').rstrip() for r in agent._observation['tty_chars']]
+    return ' / '.join(r.strip() for r in rows if r.strip())[:limit]
+
+
+def scroll_odds(candidates, count=1):
+    """{scroll name: probability} over the still possible scroll objects, weighted by generation probability.
+    A stack of `count` scrolls of one appearance is `count` independent draws of the same type, so the
+    weight is prob ** count (a pair is 44% identify, a triple 70%, against 18.5% for a single scroll)."""
+    k = max(1, min(int(count), 3))
+    total = sum(o.prob ** k for o in candidates)
+    return {o.name: o.prob ** k / total for o in candidates} if total else {}
+
+
+# outcomes that cost something or waste the scroll (destroy armor takes a cloak/armor/helm/shield; scare monster
+# is the Castle's scroll; teleportation moves us blind): 30% of an unpriced single scroll in the xid11/xid13 logs
+HARMFUL = ('destroy armor', 'amnesia', 'fire', 'earth', 'punishment', 'create monster', 'genocide',
+           'scare monster', 'teleportation')
+
+
+def harm_mass(odds):
+    return sum(odds.get(n, 0.0) for n in HARMFUL)
 
 
 def amnesia_weight(role, character_cls):
@@ -62,6 +81,8 @@ def wants_read(odds, has_target, amnesia_w):
     sev = severe_risk(odds, amnesia_w)
     value = 1.0 if has_target else 0.0
     ok = p_id >= cfg.SCROLL_MIN_P_IDENTIFY and p_id * value >= cfg.SCROLL_SEVERE_COST * sev
+    if ok and cfg.SCROLL_MAX_HARM is not None and harm_mass(odds) > cfg.SCROLL_MAX_HARM:
+        ok = False
     return ok, p_id, sev
 
 
@@ -124,7 +145,7 @@ def read_scrolls_to_identify(self):
     amn_w = amnesia_weight(agent.character.role, Character)
     best = None
     for item, objs in _scroll_candidates(self):
-        ok, p_id, sev = wants_read(scroll_odds(objs), True, amn_w)
+        ok, p_id, sev = wants_read(scroll_odds(objs, item.count if cfg.SCROLL_STACK_ODDS else 1), True, amn_w)
         if ok and (best is None or p_id > best[1]):
             best = (item, p_id, sev)
     if best is None:
@@ -137,8 +158,11 @@ def read_scrolls_to_identify(self):
     scroll_letter = self.items.get_letter(scroll)
     before = {i.glyphs[0] for i in targets}
 
+    trace = {'exit': '', 'menu': 0, 'screen': ''}
+
     def gen():
         if 'What do you want to read?' not in agent.single_message:
+            trace['exit'] = 'no read prompt'
             return
         yield scroll_letter
         chosen, guard = set(), 0
@@ -154,17 +178,24 @@ def read_scrolls_to_identify(self):
                 if b'--More--' in bytes(agent._observation['tty_chars'].reshape(-1)):
                     yield A.TextCharacters.SPACE
                     continue
+                trace['exit'] = 'no menu'
+                trace['screen'] = _screen(agent)
                 return
+            trace['menu'] += 1
             pick = next((l for l in letters if l not in chosen and f'{l} - ' in text), None)
             if pick is not None:
                 chosen.add(pick)
                 yield pick
                 yield A.MiscAction.MORE
                 continue
-            m = re.search(r'\((\d+) of (\d+)\)', text)
+            # the page marker is cut out of agent.popup, so read it off the screen: the rings and amulets come
+            # last in the menu and usually sit on page 2 ('(1 of 2)')
+            m = re.search(r'\((\d+) of (\d+)\)', _screen(agent, 4000))
             if m and int(m.group(1)) < int(m.group(2)):
                 yield '>'
                 continue
+            trace['exit'] = 'no target in menu'
+            trace['screen'] = _screen(agent)
             yield A.Command.ESC              # nothing to pick here: the scroll is spent
             return
 
@@ -176,6 +207,8 @@ def read_scrolls_to_identify(self):
     after = {i.glyphs[0] for i in _unidentified_wearables(self)}
     tail = ' | '.join(agent._message_history[-10:])[-260:]
     _log(self, f'scroll_read p_id={p_id:.2f} severe={sev:.3f} identified={len(before - after)} msgs={tail!r}')
+    if cfg.SCROLL_DEBUG and not (before - after):
+        _log(self, f"scroll_dbg exit={trace['exit']!r} menu_pages={trace['menu']} screen={trace['screen']!r}")
 
 
 def _always_wear(item):

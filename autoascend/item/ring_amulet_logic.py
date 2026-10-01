@@ -8,6 +8,7 @@ mkobj.c (strangulation/restful sleep/change amulets are cursed 9 in 10), the #re
 refusing a cursed worn item, eat.c gethungry() (1 nutrition per 20 turns per worn ring/amulet),
 pray.c (strangulation is major trouble a prayer fixes)."""
 import os
+import re
 import sys
 
 import nle.nethack as nh
@@ -279,11 +280,48 @@ def wear_starting_rings(self):
     self.put_on(candidate)
 
 
+def buc_of(item):
+    """'cursed' / 'uncursed' / 'blessed' as the game printed it on the item line, None when the line carries no
+    such word, i.e. the BUC is not known (the host parser turns an unknown status into UNCURSED, so the
+    status field cannot tell; for a Priest every item is known and 'uncursed' is simply not printed)."""
+    m = re.search(r'\b(cursed|uncursed|blessed)\b', item.text or '')
+    return m.group(1) if m else None
+
+
+@utils.debug_log('inventory.observe_altar_opportunity')
+@Strategy.wrap
+def observe_altar_opportunity(self):
+    """Measurement only, never acts: how often is an altar on the level while an unknown-BUC ring/amulet is in
+    the pack (gate of the BUC-first plan)."""
+    if cfg.OBSERVE_ALTAR:
+        from ..character import Character
+        from ..glyph import G
+        agent = self.agent
+        if agent.character.role != Character.PRIEST:
+            unknown = [i for i in self.items if i.category in (nh.RING_CLASS, nh.AMULET_CLASS) and buc_of(i) is None]
+            level = agent.current_level()
+            key = level.key()
+            if unknown and key not in self._altar_logged:
+                mask = utils.isin(level.objects, G.ALTAR)
+                if mask.any():
+                    self._altar_logged.add(key)
+                    dis = agent.bfs()
+                    reach = mask & (dis != -1)
+                    _log(self, f'altar_opportunity reachable={bool(reach.any())} '
+                               f'dist={int(dis[reach].min()) if reach.any() else -1} unknown_items={len(unknown)}')
+            for i in unknown:
+                if i.glyphs[0] not in self._unknown_logged:
+                    self._unknown_logged.add(i.glyphs[0])
+                    _log(self, f'unknown_buc_item kind={"ring" if i.category == nh.RING_CLASS else "amulet"}')
+    yield False
+
+
 def install(inventory_cls):
     """Attach the primitives and strategies to Inventory, add their per-episode state, and make a
     worn ring/amulet count as not droppable (NetHack won't drop a worn item, like armor)."""
     from . import scroll_identify as si
-    for name, fn in (('read_scrolls_to_identify', si.read_scrolls_to_identify),
+    for name, fn in (('observe_altar_opportunity', observe_altar_opportunity),
+                     ('read_scrolls_to_identify', si.read_scrolls_to_identify),
                      ('wear_identified_beneficial', si.wear_identified_beneficial),
                      ('put_on', put_on), ('remove_ring_or_amulet', remove_ring_or_amulet),
                      ('_try_remove', _try_remove), ('identify_amulet_by_wear', identify_amulet_by_wear),
@@ -305,6 +343,8 @@ def install(inventory_cls):
         self._starting_ring_tries = {}
         self._last_scroll_read_turn = -10 ** 9
         self._wear_benefit_tries = {}
+        self._altar_logged = set()
+        self._unknown_logged = set()
 
     inventory_cls.__init__ = __init__
 

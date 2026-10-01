@@ -53,3 +53,16 @@ ALWAYS_WEAR_AMULETS = ('amulet of life saving', 'amulet versus poison')
 # own levitation / magical breathing / teleport-control machinery, which wears and removes rings and
 # amulets on purpose -- removing a levitation ring over the moat would drown the character
 MAX_DEPTH = 24
+
+# stderr diagnostics (RINGSTAT scroll_dbg) for a scroll read that identified nothing
+SCROLL_DEBUG = False
+
+# harm gate: read an unknown scroll only if the share of harmful or wasteful outcomes (scroll_identify.HARMFUL)
+# among its still possible types is at most this (None = no gate). A single unpriced scroll is 0.30, a pair 0.15,
+# a price-narrowed {identify, light, enchant weapon/armor, remove curse} 0.
+SCROLL_MAX_HARM = 0.16
+# weigh a stack of n scrolls of one appearance as n draws of the same type (prob ** n)
+SCROLL_STACK_ODDS = True
+
+# measurement only (RINGSTAT altar_opportunity / unknown_buc_item): an altar on the level while an unknown-BUC ring/amulet is carried
+OBSERVE_ALTAR = False

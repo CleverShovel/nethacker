@@ -1,0 +1,7 @@
+
+# Local GigaEvo diagnostics, never part of the candidate.
+.nethack-smoke-used
+.nethack-eval/
+feedback.json
+__pycache__/
+*.pyc

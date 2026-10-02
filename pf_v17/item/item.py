@@ -1,8 +1,7 @@
 import nle.nethack as nh
 
-from pf_s25p8 import objects as O
-from pf_s25p8.glyph import MON, WEA
-from pf_s25p8 import jf_config
+from pf_v17 import objects as O
+from pf_v17.glyph import MON, WEA
 
 
 class Item:
@@ -64,13 +63,7 @@ class Item:
                 (isinstance(self.objs[0], (O.Weapon, O.WepTool)) and self.status == Item.CURSED and self.equipped) or
                 (isinstance(self.objs[0], O.Armor) and self.equipped) or
                 (self.is_unambiguous() and self.object == O.from_name('loadstone') and self.status == Item.CURSED) or
-                (self.category == nh.BALL_CLASS and self.equipped) or
-                # WORN_KEEP (ledger B019): a worn ring / amulet / blindfold can't be dropped either ('You cannot drop
-                # something you are wearing.', no game time) -- arrange_items dropped the worn ring of teleport control
-                # in a loop, ~700 steps per game turn, 850 turns in 20 wall minutes (sd-id-C public-s7~1)
-                (jf_config.WORN_KEEP and self.equipped and
-                 (self.category in (nh.RING_CLASS, nh.AMULET_CLASS) or
-                  (self.category == nh.TOOL_CLASS and not isinstance(self.objs[0], O.WepTool))))
+                (self.category == nh.BALL_CLASS and self.equipped)
         )
 
     def weight(self, with_content=True):
@@ -222,11 +215,12 @@ class Item:
             return False
         if not self.is_ray_wand():
             return False
-        if jf_config.LATE_FIXES and self.uses and ':' in self.uses and self.uses.split(':')[1].isdigit() and \
-                int(self.uses.split(':')[1]) <= 0:
-            return False  # "(n:0)" -- known to be empty (the old 'no charges' test never matched)
-        if self.objs[0] == O.from_name('sleep', nh.WAND_CLASS):
+        if self.uses == 'no charges':
+            # TODO: is it right ?
             return False
+        # hypothesis: Healers start with a wand of sleep; using it to disable dangerous
+        # approaching monsters (then meleeing them while asleep) should improve early-game
+        # survival across all four Healer identities, which currently die to melee monsters at DLvl 1.
         if self.objs[0] == O.from_name('digging', nh.WAND_CLASS):
             return False
         return True

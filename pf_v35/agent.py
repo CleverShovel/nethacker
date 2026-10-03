@@ -2014,7 +2014,7 @@ class Agent:
         st = self._fight_stall
         key = self.current_level().key()
         # contact, or deliberately holding out on Elbereth / hurt: not a stall to break
-        contact = best_action[0] in ('melee', 'kick', 'zap', 'cast', 'wait', 'elbereth') or \
+        contact = best_action[0] in ('melee', 'kick', 'zap', 'wait', 'elbereth') or \
             bl.hitpoints < 0.5 * bl.max_hitpoints
         names = frozenset(m[3].mname for m in monsters if not utils.adjacent((bl.y, bl.x), (m[1], m[2])))
         ended = None if st is None else 'gap' if bl.time - st[2] > 10 else 'contact' if contact else \
@@ -2151,7 +2151,7 @@ class Agent:
                     a[1][0] in ('melee', 'kick') and self._spore_unsafe_at(self.blstats.y + a[1][1],
                                                                           self.blstats.x + a[1][2]))]
             if allow_attack_all:
-                attack_actions = [a for a in actions if a[1][0] in ('melee', 'kick', 'ranged', 'zap', 'cast')]
+                attack_actions = [a for a in actions if a[1][0] in ('melee', 'kick', 'ranged', 'zap')]
                 if attack_actions:
                     actions = attack_actions
 
@@ -2281,13 +2281,6 @@ class Agent:
             assert self.inventory.engraving_below_me.lower() == 'elbereth'
             self.stats_logger.log_event('wait_in_fight')
             self.search()
-            return wait_counter
-        elif best_action[0] == 'cast':
-            _, dy, dx, spell, _targets = best_action
-            _pw = self.blstats.energy
-            from . import wizard_magic as _wizard_magic
-            _asked = _wizard_magic.cast_directed(self, spell, dy, dx)
-            _wizard_magic.note_cast(self, spell, _pw, not _asked, _targets)
             return wait_counter
         elif best_action[0] == 'zap':
             if len(best_action) == 5:

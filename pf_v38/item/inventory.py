@@ -941,7 +941,6 @@ class Inventory:
             self.pickup_and_drop_items()
                 .before(self.check_containers())
                 .before(self.wear_best_stuff())
-                .before(self.learn_spells())
                 .before(self.wand_engrave_identify())
                 .before(self.use_spare_wishes())
                 .before(self.wear_life_saving())
@@ -1760,7 +1759,3 @@ class Inventory:
             yield False
 
         yield from self.arrange_items().strategy()
-
-
-from .. import wizard_magic as _wizard_magic  # noqa: E402
-_wizard_magic.install(Inventory)

@@ -430,7 +430,7 @@ class Character:
         self.spell_fail_chance = dict()
 
         # TODO: parse for other spellcaster classes
-        if self.role not in (self.HEALER, self.WIZARD):
+        if self.role not in (self.HEALER,):
             return
 
         with self.agent.atom_operation():
@@ -448,8 +448,7 @@ class Character:
                                      r'(' + '|'.join(ALL_SPELL_CATEGORIES) + ') *' +
                                      r'([0-9]*)\% *' +
                                      r'([0-9]*\%|\(gone\))', line)
-                if len(matches) != 1:
-                    continue
+                assert len(matches) == 1, (matches, line)
                 letter, spell_name, level, category, fail, retention = matches[0]
                 assert len(letter) == 1, letter
                 self.known_spells[spell_name] = letter

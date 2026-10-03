@@ -1,18 +1,21 @@
 {
   "schema": "nethackers.solution/v1",
-  "name": "jawfish-s22-prayermodel-arcdig+wiz-forcebolt",
-  "root": "autoascend",
+  "name": "daglar-identity-portfolio+wiz-forcebolt",
+  "root": "pf_v35",
   "parents": [
-    "github.com/PetrAnokhin/nethacker@5c1186c8051ca8a885b79216d8dde7aa13e28594"
+    "github.com/daglar-dragomirov/nethacker@2b2f2abd7ce3ea59c576fa578311faf4cf03acf9"
   ],
   "influences": [
     "github.com/DT6A/nethacker@59ce30c509ef568366fe846afeba03dede939339",
     "github.com/daglar-dragomirov/nethacker@14626734f3d8a0702b52e67996ba86b57ef0b852",
+    "github.com/daglar-dragomirov/nethacker@5d0d455a1585271143aa47fbd5b44c2f6dae7d4b",
     "github.com/daglar-dragomirov/nethacker@c131c7c377fc36b84b2c969aee4b40ff9ec6e653",
     "github.com/daglar-dragomirov/nethacker@cb527267cc6e3562ea8e02ccc09c90ff17fe8ccf",
+    "github.com/kefirski/nethacker@314507ee72fcedf3749b6e2b4d60330bc159e88f",
     "github.com/kefirski/nethacker@5b7f1ebb452945da5d76862ce21d8b1a0053c0f5",
     "github.com/kefirski/nethacker@91cc604d54aec632e67f8f21680319ac7e77a2fd",
     "github.com/kenforthewin/nethack_astra@38b1a38b340d4cb154fe5e4411b2819dc407d5e3",
+    "github.com/vkurenkov/nethacker@21e65391b70273f5c9c7e1b4df614a880da64cf1",
     "github.com/vkurenkov/nethacker@f15bb8c8e01d905d1946e32bfd2558e17394eab6"
   ],
   "entrypoint": "bot.py"

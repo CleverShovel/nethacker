@@ -1,6 +1,6 @@
 {
   "schema": "nethackers.solution/v1",
-  "name": "jawfish-s22-prayermodel-arcdig+ring-scroll-g",
+  "name": "jawfish-s22-prayermodel-arcdig+wiz-forcebolt",
   "root": "autoascend",
   "parents": [
     "github.com/PetrAnokhin/nethacker@5c1186c8051ca8a885b79216d8dde7aa13e28594"

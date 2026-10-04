@@ -2,7 +2,6 @@ from collections import defaultdict
 from itertools import product
 
 import numpy as np
-from .. import spell_magic as _spell_magic
 from scipy import signal
 
 from ..glyph import G, MON
@@ -465,7 +464,6 @@ def get_available_actions(agent, monsters):
                 actions.append((pri, ('ranged', dy, dx)))
 
             actions.extend(get_potential_wand_usages(agent, monsters, dy, dx))
-            actions.extend(_spell_magic.get_potential_spell_usages(agent, monsters, dy, dx))
 
     to_pickup = decide_what_to_pickup(agent)
     if to_pickup:

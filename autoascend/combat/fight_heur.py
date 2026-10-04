@@ -2,7 +2,7 @@ from collections import defaultdict
 from itertools import product
 
 import numpy as np
-from .. import wizard_magic as _wizard_magic
+from .. import spell_magic as _spell_magic
 from scipy import signal
 
 from ..glyph import G, MON
@@ -103,51 +103,6 @@ def missiles_risk_the_watch(agent):
     return utils.any_in(agent.glyphs, WATCH_GLYPHS)
 
 
-# role-ran-a: Ranger point-blank archery. With the launcher in hand and matching ammo, a Ranger shoots an
-# adjacent monster instead of swapping to its dagger (fight2's 'melee' wields the best melee weapon first).
-#  - wield.c ready_weapon (l.162) / dowield (l.306): every wield takes a move, so the bow->dagger swap when
-#    a monster steps adjacent, and the dagger->bow swap for the next target at range, each hand the monster
-#    a free round (57-86 swap pairs per champion Ranger game; a wererat and a werejackal both bit through
-#    such a swap in confirm 203062 / 202550, and the lycanthropy it passed on (mhitu.c AD_WERE l.1312, 1/4 per
-#    bite) ended both grinds).
-#  - dothrow.c thitmonst (l.1563): to-hit gets +(3 - distance), so +2 at point blank; dothrow.c l.146:
-#    Rangers fire rnd(2+) arrows per volley (+1 more for elven/orcish bow+arrows, +1 at Skilled bow);
-#    a +2 arrow does d6+2 (d5+2 orcish) against the +1 dagger's d4+1, and nothing requires a gap
-#    (zap.c bhit l.3326 hits the first monster on the path, the adjacent square included).
-# Only where the stock logic would melee: weak monsters (arrow breakage, dothrow.c l.1713) and the
-# ranged-only / exploding kinds keep their old handling. Any exception keeps the old priority.
-RANGER_POINT_BLANK = True
-
-
-def ranger_point_blank(agent, launcher, ammo):
-    """A Ranger (not polymorphed) whose best ranged set is a wielded launcher with matching ammo."""
-    try:
-        return bool(RANGER_POINT_BLANK) and agent.character.role == agent.character.RANGER and \
-            not agent.character.prop.polymorph and \
-            launcher is not None and ammo is not None and launcher.equipped and \
-            ammo.is_fired_projectile(launcher)
-    except Exception:
-        return False
-
-
-def ranger_point_blank_priority(agent, monster, default):
-    """The shot's priority: one above what melee_monster_priority gives with a melee weapon in hand (16 when
-    HP > 8 or the monster is faster), so it wins over melee, which would first swap to the dagger."""
-    try:
-        _, _, _, mon, _ = monster
-        if mon.mname in WEAK_MONSTERS or mon.mname in ONLY_RANGED_SLOW_MONSTERS or \
-                mon.mname in EXPLODING_MONSTERS:
-            return default
-        ret = 2
-        if agent.blstats.hitpoints > 8 or is_monster_faster(agent, monster):
-            ret += 15
-        if 'were' in mon.mname:
-            ret += 1
-        return ret
-    except Exception:
-        return default
-
-
 def ranged_priority(agent, dy, dx, monsters):
     if missiles_risk_the_watch(agent):
         return None
@@ -213,8 +168,6 @@ def ranged_priority(agent, dy, dx, monsters):
                 if agent.glyphs[by, bx] in G.PETS or \
                         (agent.glyphs[by, bx] in G.MONS and not any(m[1] == by and m[2] == bx for m in monsters)):
                     return None
-            if dis == 1 and ranger_point_blank(agent, launcher, ammo):
-                ret = ranger_point_blank_priority(agent, monster[0], ret)
             return ret, y, x, monster[0]
 
 
@@ -465,7 +418,7 @@ def get_available_actions(agent, monsters):
                 actions.append((pri, ('ranged', dy, dx)))
 
             actions.extend(get_potential_wand_usages(agent, monsters, dy, dx))
-            actions.extend(_wizard_magic.get_potential_spell_usages(agent, monsters, dy, dx))
+            actions.extend(_spell_magic.get_potential_spell_usages(agent, monsters, dy, dx))
 
     to_pickup = decide_what_to_pickup(agent)
     if to_pickup:

@@ -13,7 +13,6 @@ from nle.nethack import actions as A
 from . import combat
 from . import jf_config, jf_log, jf_scenario
 from . import power
-from . import power_route
 from . import utils
 from .character import Character
 from .exceptions import AgentPanic, AgentFinished, AgentChangeStrategy
@@ -25,6 +24,8 @@ from .item.inventory import Inventory
 from .level import Level
 from .monster_tracker import MonsterTracker, disappearance_mask
 from .nhmodel.prayer import PrayerModel, rnz_cdf
+from .recovery import Recovery, SearchResult, SearchStalled
+from .spell_healing import SpellHealing
 from .stats_logger import StatsLogger
 from .strategy import Strategy
 
@@ -115,6 +116,9 @@ class Agent:
         self._fight_moves = []         # (turn, level key, position) of fight2's consecutive moves (FIGHT_STALL_MOVES)
 
         self.last_cast_fail_turn = defaultdict(lambda: -float('inf'))
+        self.spell_healing = SpellHealing()
+        self.recovery = Recovery(self)
+        self._recovery_response_steps = None
 
         self.stats_logger = StatsLogger()
 
@@ -418,20 +422,14 @@ class Agent:
                 self._faint_msg_turn = None
         return done
 
-    def _note_poly_control(self):
-        """The game asked 'Become what kind of monster?': polymorph control, from one of the rings worn now (or an
-        intrinsic when none is). dive_logic.xorn_repoly zaps the wand of polymorph again only while these rings are
-        still on (a bolt of lightning turned jf16-s0~13's ruby ring to dust on Gehennom 5)."""
-        self._poly_control_turn = self.blstats.time
-        try:
-            self._poly_control_rings = frozenset(self.inventory.items.get_letter(i) for i in self.inventory.items
-                                                 if i.category == nh.RING_CLASS and i.equipped)
-        except Exception:
-            self._poly_control_rings = None
-
     def step(self, action, additional_action_iterator=None):
         if self._no_step_calls:
             raise ValueError("Shouldn't call step now")
+
+        if self._recovery_response_steps is not None:
+            if self._recovery_response_steps <= 0:
+                raise SearchStalled("recovery search prompt did not finish")
+            self._recovery_response_steps -= 1
 
         if isinstance(action, str):
             assert len(action) == 1
@@ -455,20 +453,12 @@ class Agent:
             raise AgentFinished()
 
         self.update(observation, additional_action_iterator)
+        # Preserve the direct response before recursive prompt/housekeeping updates.
+        return observation
 
     def update(self, observation, additional_action_iterator=None):
         self._observation = observation
         done = self.update_message_and_popup(observation)
-        # TC_ROUTE (power_route.py): TC prompts, the tengu intrinsic and read effects are learned before the prompt
-        # handling below answers them
-        power_route.note_message(self)
-        if jf_config.CFP_XORN or jf_config.CFP_INVIS or jf_config.VALLEY_XORN:
-            # castle-first-pass: our polymorph form (and invisibility) from the messages (an invisible hero's square
-            # shows no form glyph); VALLEY_XORN needs 'You return to dwarven form!' too: without it a lapsed xorn kept
-            # walking into the Valley's walls ('It's a wall.') while a troll beat it to death (vxx2 s2; s4, s6 with
-            # vampire bats)
-            from . import castle_cross
-            castle_cross.note_message(self)
 
         self._is_reading_message_or_popup = True
         if additional_action_iterator is not None:
@@ -509,38 +499,6 @@ class Agent:
                 self.log(f'POWER wishing for {text!r}')
                 power.note_wish(self, text)
                 self.step(text[0], iter(text[1:] + '\r'))
-                return
-            elif jf_config.LEVELPORT_DEEP and 'To what level do you want to teleport?' in self.single_message and \
-                    hasattr(self, 'blstats') and self.blstats.dungeon_number in (0, 1) and \
-                    self._text_prompt_escapes == 0:
-                # teleport control (teleport.c level_tele): from the Dungeons any level past the castle is
-                # find_hell() -- the Valley, castle+1 -- and from Gehennom level 50 exactly, or the vibrating-square
-                # level (bottom-1) when that is shallower. 50 is the top of the progress table (Dlvl 51 is not in
-                # it: harness wr2-unknown seeds 5 and 11 landed on 51 and scored only their Valley). ESC cancels the
-                # teleport, and a level teleporter is used up before it asks.
-                self.log('LEVELPORT controlled level teleport: asking for level 50')
-                self._text_prompt_escapes += 1   # one answer per prompt; a re-ask falls back to ESC
-                self.step('5', iter('0\r'))
-                return
-            elif jf_config.POLY_XORN and 'Become what kind of monster?' in self.single_message and \
-                    self._text_prompt_escapes == 0 and power_route.on_castle_level(self):
-                # polymorph control (polyself.c): ESC here means '*', a random form. On the castle ask for a xorn:
-                # M1_WALLWALK and castle.des has no NON_PASSWALL, so it walks through the walls to the trap doors
-                # (40..55,08) and falls through (not a flyer). Elsewhere today's random form stays.
-                self.log('POLY controlled polymorph on the castle: xorn')
-                self._text_prompt_escapes += 1
-                self._note_poly_control()
-                self.step('x', iter('orn\r'))
-                return
-            elif jf_config.VALLEY_XORN and 'Become what kind of monster?' in self.single_message and \
-                    self._text_prompt_escapes == 0 and self.global_logic.dive.in_gehennom():
-                # VALLEY_XORN (dive_logic.xorn_repoly): the xorn form ran out in Gehennom and the wand of polymorph
-                # was zapped at us again -- a xorn again (the Valley's walls and the stone around its map, a buffer
-                # of form HP over ours while the dig-dive goes on)
-                self.log('POLY controlled polymorph in Gehennom: xorn')
-                self._text_prompt_escapes += 1
-                self._note_poly_control()
-                self.step('x', iter('orn\r'))
                 return
             else:
                 # a text-entry flag that survives ESC after ESC recursed update->step->update until
@@ -600,6 +558,7 @@ class Agent:
             self.last_observation = observation
 
         self.blstats = BLStats(*self.last_observation['blstats'])
+        self.recovery.observe(self.blstats)
         self.glyphs = self.last_observation['glyphs']
 
         if self._prayer_model_active():
@@ -1534,22 +1493,30 @@ class Agent:
                 self._prayer_model_error()
         return self.is_safe_to_pray(500) and low_hp_old
 
+    def _emergency_downstairs_available(self):
+        """The exit both the doom comparison and emergency executor can use."""
+        level = self.current_level()
+        return (jf_config.LAST_RESORT and
+                level.objects[self.blstats.y, self.blstats.x] in G.STAIR_DOWN and
+                level.dungeon_number != Level.SOKOBAN and
+                self.blstats.time - self._last_resort_stairs_turn > 20 and
+                self.blstats.carrying_capacity < 4)
+
     def _doom_prayer_beats_exits(self, model):
         """Exits that beat a long-shot prayer: the down stairs underfoot (the last resort takes them: they
         bank a level and shed every non-follower, dog.c:keepdogs), and a fresh dust Elbereth when everything
         in reach respects it (monmove.c:onscary; the engraving is legible 0.96^8 = 72% of the time,
         engrave.c:1052-1058, and the engrave turn itself is one more round of attacks)."""
-        level = self.current_level()
         y, x = self.blstats.y, self.blstats.x
         near = [m for m in self.get_visible_monsters() if max(abs(m[1] - y), abs(m[2] - x)) <= 2]
-        if not near:
-            return False  # nothing in reach: the HP loss came from elsewhere, and the fight model has no say
-        if level.objects[y, x] in G.STAIR_DOWN and level.dungeon_number != Level.SOKOBAN and \
-                self.blstats.time - self._last_resort_stairs_turn > 20 and self.blstats.carrying_capacity < 4:
+        unseen_harm = model.unseen_attack_dps() > 0
+        if not near and not unseen_harm:
+            return False
+        if self._emergency_downstairs_available():
             return False
         dive = self.global_logic.dive
         engraving = (self.inventory.engraving_below_me or '').lower()
-        if engraving != 'elbereth' and not self.character.prop.blind and self.can_engrave() and \
+        if not unseen_harm and engraving != 'elbereth' and not self.character.prop.blind and self.can_engrave() and \
                 not any(dive._ignores_elbereth(m[3]) for m in near):
             p_elbereth = 0.72 * (1.0 - model.death_probability(turns=1))
             if model.last_p_hp < p_elbereth:
@@ -1696,7 +1663,6 @@ class Agent:
         # astra: an empty wand prints "Nothing happens" without asking for a direction, and a blindly
         # queued direction key then becomes a move or a melee attack. Only answer the prompt if it's
         # there, and remember wands that turned out empty.
-        self._last_wand_use_step = self.step_count   # WISH_TELEPORT_ROUTE: a wish from a wand
         with self.atom_operation():
             self.step(A.Command.ZAP)
             if 'carrying so much stuff' in self.message:
@@ -1765,18 +1731,43 @@ class Agent:
                     raise AgentPanic('legs too wounded to kick')
                 self.direction(self.calc_direction(self.blstats.y, self.blstats.x, y, x))
 
-    def search(self, max_count=1):
+    def search(self, max_count=1, *, return_result=False):
+        """Search normally, or report a single recovery command's completion.
+
+        Completion means a new response was parsed without a prompt or refusal;
+        it does not require the displayed game turn to advance.
+        """
         assert max_count >= 1
+        assert not return_result or max_count == 1
+        if return_result and (self._is_reading_message_or_popup or
+                              self._observation['misc'].any()):
+            return SearchResult('prompt', sent=False)
         with self.panic_if_position_changes():
             with self.atom_operation():
                 if max_count > 1:
                     self.type_text(str(max_count))
-                self.step(A.Command.SEARCH)
+                previous_observation = self.last_observation
+                previous_step = self.step_count
+                previous_turn = self.blstats.time
+                previous_budget = self._recovery_response_steps
+                if return_result:
+                    # Includes the search and automatic prompt responses only;
+                    # subsequent inventory/terrain housekeeping is outside it.
+                    self._recovery_response_steps = 8
+                try:
+                    response = self.step(A.Command.SEARCH)
+                finally:
+                    self._recovery_response_steps = previous_budget
+                if return_result:
+                    result = SearchResult.from_response(
+                        response, previous_observation, self.last_observation,
+                        self.step_count > previous_step, previous_turn, self.blstats.time,
+                        self.message, self.popup, self._is_reading_message_or_popup)
                 # TODO: estimate the real number of searches
                 self.current_level().search_count[self.blstats.y, self.blstats.x] += max_count
                 if 'You find ' in self.message:
                     self.check_terrain(force=True)
-        return True
+        return result if return_result else True
 
     def direction(self, y, x=None):
         if x is not None:
@@ -1859,21 +1850,10 @@ class Agent:
             return False
         return self.is_safe_to_pray(jf_config.WELD_PRAY_GAP)
 
-    def no_free_hand(self):
-        """The engraving check: engrave.c freehand() with FREEHAND_FIX (a welded one-hander beside an uncursed shield
-        still leaves a hand to write with), else hands_welded() (any shield counts)."""
-        if not jf_config.FREEHAND_FIX:
-            return self.hands_welded()
-        main = self.inventory.items.main_hand
-        if main is None or main.status != Item.CURSED:
-            return False
-        shield = self.inventory.items.off_hand
-        return bool(getattr(main.objs[0], 'bi', False)) or (shield is not None and shield.status == Item.CURSED)
-
     def can_engrave(self):
         if self.character.prop.polymorph:
             return False  # TODO: only for handless monsters (which cannot write)
-        if self.no_free_hand():
+        if self.hands_welded():
             return False
         return (self.blstats.y, self.blstats.x) != self._forbidden_engrave_position
 
@@ -2518,9 +2498,9 @@ class Agent:
         elif best_action[0] == 'cast':
             _, dy, dx, spell, _targets = best_action
             _pw = self.blstats.energy
-            from . import wizard_magic as _wizard_magic
-            _asked = _wizard_magic.cast_directed(self, spell, dy, dx)
-            _wizard_magic.note_cast(self, spell, _pw, not _asked, _targets)
+            from . import spell_magic as _spell_magic
+            _asked = _spell_magic.cast_directed(self, spell, dy, dx)
+            _spell_magic.note_cast(self, spell, _pw, not _asked, _targets)
             return wait_counter
         elif best_action[0] == 'zap':
             if len(best_action) == 5:
@@ -2761,48 +2741,28 @@ class Agent:
         if not yielded:
             yield False
 
-    def should_cast_heal(self):
-        # TODO: consider casting for other classes
-        if self.character.role != self.character.HEALER:
+    def should_try_spell_healing(self):
+        # Healers begin with renewable healing. Query current spell rows only
+        # when injured, rather than trusting startup letters or armor penalties.
+        if self.character.role != Character.HEALER:
             return False
-        if 'healing' not in self.character.known_spells:
+        prop = self.character.prop
+        if (prop.confusion or prop.stun or prop.hallu or prop.polymorph or
+                self.blstats.hunger_state >= Hunger.WEAK or
+                self.blstats.carrying_capacity >= 2):
             return False
-        if self.blstats.hunger_state >= Hunger.FAINTING:
-            return False
-        if self._last_turn - self.last_cast_fail_turn['healing'] < 2:
-            return False
-        if self.character.spell_fail_chance['healing'] > 0.2:
-            return False
-        hp_ratio = self.blstats.hitpoints / self.blstats.max_hitpoints
-        low_hp = hp_ratio < 0.5 or (self.blstats.hitpoints < 10 and self.blstats.max_hitpoints > 10)
-        return self.blstats.energy >= 5 and low_hp
-
-    def should_cast_extra_heal(self):
-        if 'extra healing' not in self.character.known_spells:
-            return False
-        if self.blstats.hunger_state >= Hunger.FAINTING:
-            return False
-        if self._last_turn - self.last_cast_fail_turn['extra healing'] < 2:
-            return False
-        if self.character.spell_fail_chance['extra healing'] > 0.15:
-            return False
-        hp_ratio = self.blstats.hitpoints / self.blstats.max_hitpoints
-        low_hp = hp_ratio < 0.5 and (self.blstats.max_hitpoints - self.blstats.hitpoints > 25)
-        return self.blstats.energy >= 15 and low_hp
+        return self.spell_healing.ready(self.blstats.hitpoints, self.blstats.max_hitpoints,
+                                        self.blstats.energy, self.blstats.time)
 
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
-
-        # if self.should_cast_extra_heal():
-        #     yield True
-        #     self.cast('extra healing', direction=(0, 0))
-        #     return
-
-        # if self.should_cast_heal():
-        #     yield True
-        #     self.cast('healing', direction=(0, 0))
-        #     return
+        from . import spell_magic as _spell_magic
+        _spell_pick = _spell_magic.choose_self_spell(self)
+        if _spell_pick is not None:
+            yield True
+            _spell_magic.cast_self(self, _spell_pick)
+            return
 
         # hypothesis (astra guard.py stop list): stoning, sliming, strangling and food poisoning /
         # terminal illness kill within a few turns; prayer fixes all of them, so a riskier-than-usual
@@ -2867,6 +2827,17 @@ class Agent:
         if poly_buffer:
             low_hp = False
         hp_prayer = self._hp_prayer_due(low_hp, poly_buffer)
+        # Make the escape preferred by the doom comparison executable even
+        # without a visible target. Unknown-source attacks cannot be assumed
+        # to respect Elbereth; retain the existing concrete downstairs escape.
+        if low_hp and not hp_prayer and self._prayer_model_active() and \
+                self.prayer_model.unseen_attack_dps() > 0 and self._emergency_downstairs_available():
+            yield True
+            self.log('EMERGENCY unseen attack: down the stairs')
+            self._last_resort_stairs_turn = self.blstats.time
+            self.global_logic.dive._retreat_blocked_until = self.blstats.time + 20
+            self.move('>')
+            return
         if (
                 hp_prayer
                 or self.fainting_prayer_due()
@@ -2883,6 +2854,13 @@ class Agent:
             yield True
             self._pray_reason = 'welded hands'
             self.pray()
+            return
+
+        # Renewable healing follows immediate status cures, potions and prayer;
+        # it can replenish moderate wounds before they become an emergency.
+        if self.should_try_spell_healing():
+            yield True
+            self.spell_healing.cast(self, A.Command.CAST)
             return
 
         # Last resort (LAST_RESORT): about to die, no safe prayer, a hostile adjacent. The game is

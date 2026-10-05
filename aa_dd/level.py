@@ -45,18 +45,8 @@ class Level:
 
         # e.g. ad aerarium -- avoid valut entrance
         self.forbidden = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
-        # squares holding a cockatrice-family corpse: turn until which stepping there is unsafe
-        self.petrify_until = np.zeros((C.SIZE_Y, C.SIZE_X), np.int32)
-        # doorways the game refused diagonal moves through ("intact doorway")
-        self.intact_doors = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
-        # (y, x) -> (turn last seen, turns to remember): a mold/jelly/floating eye sits there (SESSILE_MEMORY)
-        self.sessile = {}
-        # turn until which the panic-loop breaker keeps a square closed (TEMP_FORBID)
-        self.forbidden_until = np.zeros((C.SIZE_Y, C.SIZE_X), np.int32)
-        # turn a shopkeeper last blocked the door because we carry a pick-axe or mattock, and those doors
-        # {(y, x) -> (dy, dx) toward the shopkeeper inside}
-        self.dig_tool_refused = None
-        self.refused_doors = {}
+        # doorways that refused a diagonal step
+        self.no_diagonal = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
 
     def key(self):
         return (self.dungeon_number, self.level_number)

@@ -4,10 +4,10 @@ import re
 import nle.nethack as nh
 from nle.nethack import actions as A
 
-from s8ce023a import objects as O, utils
-from s8ce023a.character import Character
-from s8ce023a.glyph import MON
-from s8ce023a.item import Item
+from aa_dd import objects as O, utils
+from aa_dd.character import Character
+from aa_dd.glyph import MON
+from aa_dd.item import Item
 
 
 class ContainerContent:
@@ -261,10 +261,10 @@ class ItemManager:
             r'^(a|an|the|\d+)'
             r'( empty)?'
             r'( (cursed|uncursed|blessed))?'
-            r'( (very |thoroughly )?(rustproof|poisoned|corroded|rusty|burnt|rotted|partly eaten|partly used|diluted|unlocked|locked|moist|wet|greased))*'
+            r'( (very |thoroughly )?(rustproof|poisoned|corroded|rusty|burnt|rotted|partly eaten|partly used|diluted|unlocked|locked|wet|greased))*'
             r'( ([+-]\d+))? '
             r"([a-zA-z0-9-!'# ]+)"
-            r'( \((?:\d+ aum, )?([0-9]+:[0-9]+|no charge)\))?'   # '(20 aum, no charge)': a free glob in a shop
+            r'( \(([0-9]+:[0-9]+|no charge)\))?'
             r'( \(([a-zA-Z0-9; ]+(, flickering|, gleaming|, glimmering)?[a-zA-Z0-9; ]*)\))?'
             r'( \((for sale|unpaid), (\d+ aum, )?((\d+)[a-zA-Z- ]+|no charge)\))?'
             r'$',
@@ -285,13 +285,9 @@ class ItemManager:
         ) = matches[0]
         # TODO: effects, uses
 
-        # rings: a foocubus puts one on (s6 dive): an unparsed '(on right hand)' blinded the whole inventory
-        # (polymorphed, a ring sits 'on right foreclaw' / 'on left paw': objnam.c body_part(HAND); the assert
-        # below stalled CASTLE_POLY forms, pwc-dp12 jf27-s8)
-        if info in {'being worn', 'being worn; slippery', 'wielded', 'chained to you',
-                    'on right hand', 'on left hand'} or info.startswith(
+        if info in {'being worn', 'being worn; slippery', 'wielded', 'chained to you'} or info.startswith(
                 'weapon in ') or \
-                info.startswith('tethered weapon in ') or re.fullmatch(r'on (right|left) [a-z ]+', info):
+                info.startswith('tethered weapon in '):
             equipped = True
             at_ready = False
         elif info in {'at the ready', 'in quiver', 'in quiver pouch', 'lit'}:
@@ -523,6 +519,8 @@ class ItemManager:
             name = 'eucalyptus leaf'
         elif name == 'pair of lenses':
             name = 'lenses'
+        elif name.startswith('set of ') and name.endswith(' dragon scales'):
+            name = name[len('set of '):]
         elif name.startswith('small glob'):
             name = name[len('small '):]
         elif name == 'knives':

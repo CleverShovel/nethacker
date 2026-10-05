@@ -1,6 +1,6 @@
 import nle.nethack as nh
 
-from s8ce023a import objects as O
+from aa_dd import objects as O
 
 
 class InventoryItems:
@@ -112,10 +112,7 @@ class InventoryItems:
                             setattr(self, name, item)
                             break
 
-                # applying a bag mid-fight wasted turns during a dive (leocrotta death); defer it
-                if (item.is_possible_container() or (item.is_container() and self._recheck_containers)) and \
-                        not (getattr(getattr(getattr(self.agent, 'global_logic', None), 'dive', None), 'diving', False)
-                             and self.agent.get_visible_monsters()):
+                if item.is_possible_container() or (item.is_container() and self._recheck_containers):
                     self.agent.inventory.check_container_content(item)
 
                 if (self.agent.last_observation['inv_strs'] != previous_inv_strs).any():

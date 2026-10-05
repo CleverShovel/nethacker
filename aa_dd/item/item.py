@@ -1,8 +1,7 @@
 import nle.nethack as nh
 
-from s8ce023a import objects as O
-from s8ce023a.glyph import MON, WEA
-from s8ce023a import jf_config
+from aa_dd import objects as O
+from aa_dd.glyph import MON, WEA
 
 
 class Item:
@@ -216,11 +215,12 @@ class Item:
             return False
         if not self.is_ray_wand():
             return False
-        if jf_config.LATE_FIXES and self.uses and ':' in self.uses and self.uses.split(':')[1].isdigit() and \
-                int(self.uses.split(':')[1]) <= 0:
-            return False  # "(n:0)" -- known to be empty (the old 'no charges' test never matched)
-        if self.objs[0] == O.from_name('sleep', nh.WAND_CLASS):
+        if self.uses == 'no charges':
+            # TODO: is it right ?
             return False
+        # hypothesis: Healers start with a wand of sleep; using it to disable dangerous
+        # approaching monsters (then meleeing them while asleep) should improve early-game
+        # survival across all four Healer identities, which currently die to melee monsters at DLvl 1.
         if self.objs[0] == O.from_name('digging', nh.WAND_CLASS):
             return False
         return True

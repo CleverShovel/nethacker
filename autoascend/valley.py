@@ -76,66 +76,6 @@ SLEEP_GAS = bot(3, 1)
 ARRIVAL = (bot(58, 9), bot(72, 18))
 
 
-# The three graveyards: REGION (19,01,24,08), (09,14,16,18), (37,09,43,14) 'morgue', filled, irregular. The room is
-# sp_lev.c's flood fill (8-connected, mkmap.c flood_fill_rm) over ROOM squares from the region's top-left corner,
-# with the 'B' CROSSWALLs still boundaries (remove_boundary_syms runs later), and fill_zoo puts a sleeping
-# undead (MM_ASLEEP) on every one of its squares. 48 + 31 + 43 = 122 squares, the same in all 8 wall variants;
-# the route to the temple crosses 0 (no IF fired) to 15 (all three) of them.
-GRAVEYARD_REGIONS = ((19, 1), (9, 14), (37, 9))
-
-
-def _graveyard_squares():
-    squares = set()
-    for sx, sy in GRAVEYARD_REGIONS:
-        room = {(sx, sy)}
-        todo = [(sx, sy)]
-        while todo:
-            x, y = todo.pop()
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    n = (x + dx, y + dy)
-                    if 0 <= n[1] < len(MAP) and 0 <= n[0] < len(MAP[0]) and n not in room and MAP[n[1]][n[0]] == '.':
-                        room.add(n)
-                        todo.append(n)
-        squares |= room
-    return frozenset(bot(x, y) for x, y in squares)
-
-
-GRAVEYARD = _graveyard_squares()
-
-
-def graveyard_mask(shape):
-    mask = np.zeros(shape, bool)
-    for p in GRAVEYARD:
-        mask[p] = True
-    return mask
-
-
-_ROUTE = {}
-
-
-def route_distance(shape):
-    """Steps from each square to the '>' over the floor of every wall variant with the secret doors open (-1:
-    unreachable): the shortest route of the most open variant, a progress yardstick for logs (not for planning)."""
-    if shape in _ROUTE:
-        return _ROUTE[shape]
-    walk = floor_mask(shape)
-    for door, _ in DOORS:
-        walk[door] = True
-    dist = np.full(shape, -1, int)
-    dist[DOWN_STAIRS] = 0
-    todo = [DOWN_STAIRS]
-    for y, x in todo:
-        for dy in (-1, 0, 1):
-            for dx in (-1, 0, 1):
-                ny, nx = y + dy, x + dx
-                if (dy or dx) and 0 <= ny < shape[0] and 0 <= nx < shape[1] and walk[ny, nx] and dist[ny, nx] < 0:
-                    dist[ny, nx] = dist[y, x] + 1
-                    todo.append((ny, nx))
-    _ROUTE[shape] = dist
-    return dist
-
-
 def floor_mask(shape):
     """Squares that are floor in at least one variant of the level, in bot coordinates (doors excluded)."""
     mask = np.zeros(shape, bool)

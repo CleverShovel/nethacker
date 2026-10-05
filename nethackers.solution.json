@@ -1,13 +1,24 @@
 {
   "schema": "nethackers.solution/v1",
-  "name": "private-leader-69ba-samurai-start-rank+wiz-lowhp",
-  "root": ".",
+  "name": "jawfish-dd-router+lowhp",
+  "root": "autoascend",
   "parents": [
-    "github.com/alexeyshmelev/nethacker@43141c2eaac53525276efbba6b4e4084ff25bbec"
+    "github.com/artfawl/nethacker@9f41c5e6883c415ff0522b5635215363f52939c4"
   ],
   "influences": [
-    "github.com/daglar-dragomirov/nethacker@69baf4943e2f47a23715b3814438b180c3c64b75",
-    "github.com/daglar-dragomirov/nethacker@8ce023a8f681e7366d5f54ca419f314ac874ac59"
+    "github.com/DT6A/nethacker@464e1662a4cb60567c7946d2d952278c64eefe84",
+    "github.com/DT6A/nethacker@59ce30c509ef568366fe846afeba03dede939339",
+    "github.com/DT6A/nethacker@d956abff7baa169d549a8d12fa1d219412833b67",
+    "github.com/DT6A/nethacker@e3f389bb4f52bbb99f8c33d39ecb291537f563ab",
+    "github.com/Komershan/nethacker@132b7c2d662f40bf7f86335c98709025b8b23967",
+    "github.com/Komershan/nethacker@5deb412e988e8b8e99ad225bd69f2de86c0c63fd",
+    "github.com/Komershan/nethacker@8e0e320501ad2b70f8d912e3e555d4f1e59f786e",
+    "github.com/Komershan/nethacker@d3d40a676a096d118023e220853c2a0a8f3091fd",
+    "github.com/daglar-dragomirov/nethacker@cb527267cc6e3562ea8e02ccc09c90ff17fe8ccf",
+    "github.com/eL1fe/nethacker@dc2765b9a90074e2823521afb721b7ee16ef35a7",
+    "github.com/eL1fe/nethacker@ff8e49187df304cbd0ad2bbbe8109feb19e48e0b",
+    "github.com/kenforthewin/nethack_astra@38b1a38b340d4cb154fe5e4411b2819dc407d5e3",
+    "github.com/vkurenkov/nethacker@ef6acf87e265f74600b914060f620d06117070a3"
   ],
   "entrypoint": "bot.py"
 }

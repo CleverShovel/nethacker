@@ -166,8 +166,7 @@ POISON_EATS = False
 POISON_EATS_MIN_HP = 40
 # carry up to this many lichen/lizard corpses as a food reserve instead of eating them off the floor while not
 # Weak (0: off)
-# Maximum carried lichen/lizard reserve; Agent.reserve_corpse_limit selects the capacity.
-LICHEN_RESERVE = 4
+LICHEN_RESERVE = 0
 # the Dlvl 1 grind ends (DIVE_XL) only fed: Not Hungry within DIVE_FED_GAP turns of the last hunger prayer, or
 # carrying >= DIVE_FED_FOOD nutrition; else it waits for the next hunger prayer (at most DIVE_FED_MAX_WAIT turns)
 DIVE_FED = False
@@ -270,10 +269,7 @@ DEMON_VIGIL_RADIUS = 5
 DEMON_VIGIL_TURNS = 400
 # fight2 never melees a floating eye we can see (the exploration stall breaker's attack-all mode did: 401
 # paralysis events in 223 dev games, 35 games died frozen)
-# hypothesis: avoiding direct attacks on visible floating eyes prevents long
-# paralysis, during which otherwise manageable monsters kill priests of every
-# identity before the bot can respond.
-FEYE_FIX = True
+FEYE_FIX = False
 # no Excalibur dips during a water demon's vigil window (the bot went back to the fountain next to the demon)
 DEMON_NO_REDIP = False
 # the last resort (unknown wands/potions/scrolls) yields to the Elbereth rest while everything close respects

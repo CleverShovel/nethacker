@@ -5,6 +5,7 @@ from collections import namedtuple, Counter, defaultdict
 from functools import partial
 
 import nle.nethack as nh
+import nltk
 import numpy as np
 from nle.nethack import actions as A
 
@@ -26,22 +27,6 @@ from .strategy import Strategy
 
 BLStats = namedtuple('BLStats',
                      'x y strength_percentage strength dexterity constitution intelligence wisdom charisma score hitpoints max_hitpoints depth gold energy max_energy armor_class monster_level experience_level experience_points time hunger_state carrying_capacity dungeon_number level_number prop_mask alignment')
-
-
-# hypothesis: keep startup and early inventory arithmetic on lightweight Python
-# paths so every character can act and descend before the arena's timeout.
-def _edit_distance_within(a, b, limit):
-    """Return whether the Levenshtein distance is at most ``limit``."""
-    if abs(len(a) - len(b)) > limit:
-        return False
-    previous = list(range(len(b) + 1))
-    for i, left in enumerate(a, 1):
-        current = [i]
-        for j, right in enumerate(b, 1):
-            current.append(min(current[-1] + 1, previous[j] + 1,
-                               previous[j - 1] + (left != right)))
-        previous = current
-    return previous[-1] <= limit
 
 
 class Agent:
@@ -884,8 +869,8 @@ class Agent:
                 level.walkable[y, x] = False  # necessary for the exit route from vaults
 
         # ad aerarium -- avoid valut entrance
-        if self.inventory.engraving_below_me and _edit_distance_within(
-                self.inventory.engraving_below_me, "ad aerarium", 6):
+        if self.inventory.engraving_below_me and nltk.edit_distance(self.inventory.engraving_below_me,
+                                                                    "ad aerarium") <= 6:
             self.stats_logger.log_event('ad_aerarium_below_me')
             for dy, dx in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
                 y, x = self.blstats.y + dy, self.blstats.x + dx
@@ -1092,19 +1077,9 @@ class Agent:
         hostile attack during the faints and 9 of those died (~8%), while rnz(350) fails a prayer 6.2% of the
         time at a 950 gap, 5.5% at 1000 and 3.9% at 1100 -- and the Weak->Fainting transition always faints
         at once (eat.c newuhs), so an approaching monster gets 10+ free turns."""
+        if not jf_config.THREAT_PRAYER_GAP or self.prayer_failed or self.global_logic.dive.diving:
+            return False
         bl = self.blstats
-        if self.prayer_failed or self.global_logic.dive.diving:
-            return False
-        # A rothe pack's three attacks apiece can consume a full faint before
-        # the ordinary prayer gap. At low HP, a risky prayer is the escape.
-        if bl.hunger_state >= Hunger.FAINTING and bl.hitpoints < 0.75 * bl.max_hitpoints and \
-                self.is_safe_to_pray(900):
-            rothes_near = sum(m[3].mname == 'rothe' and m[0] <= 5 for m in self.get_visible_monsters())
-            if rothes_near >= 2:
-                self._pray_reason = 'rothe-pack-faint'
-                return True
-        if not jf_config.THREAT_PRAYER_GAP:
-            return False
         if bl.hunger_state < Hunger.WEAK:
             return False
         if bl.hunger_state == Hunger.WEAK:
@@ -2188,29 +2163,15 @@ class Agent:
         return sum(item.count for item in flatten_items(self.inventory.items)
                    if item.is_corpse() and item.monster_id in self.RESERVE_CORPSE_IDS)
 
-    def reserve_corpse_limit(self):
-        # hypothesis: a short-lived hunger gap during the XL 8 grind is safer
-        # when human chaotic and neutral priests can draw on nonrotting food;
-        # chaotic priests benefit from one more stored meal, while carrying
-        # this reserve disrupts the stronger elf and lawful openings.
-        if self.character.role != Character.PRIEST or self.character.race != Character.HUMAN:
-            return 0
-        if self.character.alignment == Character.CHAOTIC:
-            return jf_config.LICHEN_RESERVE
-        if self.character.alignment == Character.NEUTRAL:
-            return max(0, jf_config.LICHEN_RESERVE - 1)
-        return 0
-
     def reserve_corpse(self, monster_id):
         """LICHEN_RESERVE: keep a lichen/lizard corpse (they never rot) instead of eating it off the floor while
         not Weak. Eaten at once it only lengthens whatever cycle we are in; carried, eat_from_inventory spends it
         when Weak before a safe prayer gap -- the starved cycles (31% of the base grinds' prayer cycles turned
         Weak 800-899 turns after the last prayer, 26% fainted, and all 9 fainting deaths came in cycles that
         had eaten 0-100 nutrition). We ate ~9 lichen corpses per grind (~1800 nutrition)."""
-        limit = self.reserve_corpse_limit()
-        if not (limit and monster_id in self.RESERVE_CORPSE_IDS and
+        if not (jf_config.LICHEN_RESERVE and monster_id in self.RESERVE_CORPSE_IDS and
                 self.blstats.hunger_state < Hunger.WEAK and not self.global_logic.dive.diving and
-                self.carried_reserve_corpses() < limit):
+                self.carried_reserve_corpses() < jf_config.LICHEN_RESERVE):
             return False
         # only if the item priority can keep it (it keeps items in order within character.carrying_capacity):
         # a heavy pack left a jf14 lichen corpse neither picked up nor eaten while we walked over it for 400 turns

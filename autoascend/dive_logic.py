@@ -21,6 +21,7 @@ import re
 import nle.nethack as nh
 import numpy as np
 from nle.nethack import actions as A
+from scipy import ndimage
 
 from . import objects as O
 
@@ -45,26 +46,6 @@ GEHENNOM = 1
 MAIN_LINE = (Level.DUNGEONS_OF_DOOM, GEHENNOM)
 
 PORTAL_MESSAGES = ('telepathic message', 'pleading for help', 'demanding your attendance')
-
-
-def _label_cardinal_regions(mask):
-    """Number each four-connected region, matching ndimage.label's default."""
-    labels = np.zeros(mask.shape, dtype=int)
-    count = 0
-    height, width = mask.shape
-    for y, x in zip(*mask.nonzero()):
-        if labels[y, x]:
-            continue
-        count += 1
-        labels[y, x] = count
-        pending = [(y, x)]
-        while pending:
-            cy, cx = pending.pop()
-            for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
-                if 0 <= ny < height and 0 <= nx < width and mask[ny, nx] and not labels[ny, nx]:
-                    labels[ny, nx] = count
-                    pending.append((ny, nx))
-    return labels, count
 
 # XP gate: while XL < REQUIRED_XL[depth of the next level], the current level is explored
 # fully first (items + XP), within FULL_EXPLORE_TURNS. Dlvl 1-4 are always explored fully.
@@ -234,7 +215,10 @@ HUNT_MIN_XL = 8
 # With a digging tool the dive is a few turns per level and XL matters much less (s7 public seed 10:
 # Dlvl 4 -> 26 in ~200 turns of digging, past Medusa): dive as soon as one is in hand from this XL,
 # and keep one during the tour (it drops them for lighter loot).
-DIG_DIVE_XL = 8
+# hypothesis: a pick carrier (every Archeologist) that grinds Dlvl 1 on to XL 8 spends ~20k turns there and
+# 4/15 arc games died in that grind (0.02-0.05); digging from XL 7 under the sheltered dig banks Dlvl 20+ far
+# sooner. Measured arc seeds 0-14: 4.46 -> 6.32 summed (XL 6: 6.17, XL 5: 4.99). Others: no tool, unchanged.
+DIG_DIVE_XL = 7
 KEEP_TOOL_IN_TOUR = False
 # The portal sweep (Home 1 = 0.366) costs ~1500 turns of exploring the level; digging reaches
 # Dlvl 20+ (0.38+) within a few hundred turns, so no sweep while holding a digging tool.
@@ -1060,8 +1044,6 @@ class DiveLogic:
         bl = agent.blstats
         digger = DIVE_REST and self._digger_here()
         rest_below = DIG_REST_BELOW if digger else REST_BELOW
-        if self._late_digger():
-            rest_below = 0.0
         if bl.hitpoints < rest_below * bl.max_hitpoints and not agent.get_visible_monsters() and \
                 bl.hunger_state < Hunger.WEAK and not (digger and self._in_own_pit()) and \
                 not self._gehennom_digger():
@@ -1265,11 +1247,7 @@ class DiveLogic:
             yield False
         near = self._near_hostiles()
         # a lone weak monster is better killed than hidden from (engraving gives it a free hit)
-        # hypothesis: a rothe's three attacks can overwhelm a poorly armored
-        # priest even though its monster level is only 2; shelter at low HP.
-        exposed_to_rothe = bool(near) and near[0][3].mname == 'rothe' and bl.armor_class >= 3
-        if len(near) == 1 and getattr(near[0][3], 'difficulty', 99) <= 2 and \
-                not exposed_to_rothe and bl.hitpoints >= 6:
+        if len(near) == 1 and getattr(near[0][3], 'difficulty', 99) <= 2 and bl.hitpoints >= 6:
             self._elbereth_resting = False
             yield False
         if not near or any(self._ignores_elbereth(m[3]) for m in near) or \
@@ -1496,19 +1474,14 @@ class DiveLogic:
             # a rescue's faints only get longer (no prayer is coming): a lone newt bit a fainted 44-HP XL5 to death
             # in ~100 turns (rescue agent's SIM jf14 s8), so there a lone trivial monster is fought only above 70%
             fight_above = 0.7 if rescue_guard else 0.5
-            # hypothesis: a priest with under 50 HP can die to repeated free hits during a single faint,
-            # even from a goblin or rat; shelter before engaging these otherwise trivial monsters.
-            threat = not (len(near) == 1 and trivial(near[0]) and bl.hitpoints >= 50 and
-                          bl.hitpoints >= fight_above * bl.max_hitpoints)
+            threat = not (len(near) == 1 and trivial(near[0]) and bl.hitpoints >= fight_above * bl.max_hitpoints)
         else:
             # Weak: the faint is still up to ~50 turns away; hold only against what a single faint can't
             # afford: a real fighter (difficulty >= 4: hill orc, rothe, giant ant, dwarf, werejackal), a
             # fast biter (bat, giant bat, little dog), or two monsters above difficulty 1. The first version
             # (monster level >= 2) also held against lone iguanas and kobold lords, which a faint survives.
-            near_faint = agent.uhunger_weak_estimate()
-            threat = (bl.hitpoints < 50 and near_faint is not None and near_faint <= 15) or \
-                any(difficulty(m) >= 4 or (difficulty(m) >= 2 and getattr(m[3], 'mmove', 0) > 12)
-                    for m in near) or sum(1 for m in near if not trivial(m)) >= 2
+            threat = any(difficulty(m) >= 4 or (difficulty(m) >= 2 and getattr(m[3], 'mmove', 0) > 12)
+                         for m in near) or sum(1 for m in near if not trivial(m)) >= 2
         if not threat:
             yield False
         engraving = (agent.inventory.engraving_below_me or '').lower()
@@ -1841,8 +1814,6 @@ class DiveLogic:
         # a digger takes stairs like a hole: a deep rest to 95% at XL 8 (1 HP per 5 turns) lets the level's
         # monsters come (base-jf25 s13 rested 180 turns at a Dlvl 14 '>' and died there)
         threshold = DIG_REST_BELOW if digger else REST_BEFORE_DESCEND
-        if self._late_digger():
-            threshold = 0.0
         if agent.blstats.hitpoints >= threshold * agent.blstats.max_hitpoints:
             return False
         if digger and agent._hurt_recently(3):
@@ -1865,11 +1836,6 @@ class DiveLogic:
         level = agent.current_level()
         return self.diving and level.dungeon_number in MAIN_LINE and level.dungeon_number != GEHENNOM and \
             level.key() not in self.undiggable and self.digging_tool() is not None
-
-    def _late_digger(self):
-        # hypothesis: from depth 18 a digger gains more progression by making
-        # the next hole immediately than by resting while dangerous monsters arrive.
-        return self.agent.blstats.depth >= 18 and self._digger_here()
 
     def _rest_elbereth(self):
         """DIVE_REST: engrave Elbereth before resting, so that what arrives meanwhile can't melee us (the
@@ -3022,8 +2988,6 @@ class DiveLogic:
             return True
         if tool is not None:
             rest_below = GEHENNOM_DIG_REST_BELOW if self.in_gehennom() else DIG_REST_BELOW
-            if self._late_digger():
-                rest_below = 0.0
             if agent.blstats.hitpoints < rest_below * agent.blstats.max_hitpoints and \
                     not (DIVE_REST and self._in_own_pit()):
                 self._task('rest before digging')
@@ -3749,7 +3713,7 @@ class DiveLogic:
         unknown = level.walkable & (objs == -1)
         unknown &= utils.dilate(floor, radius=1, with_diagonal=False)
         roomish = floor | furniture | unknown
-        labels, n = _label_cardinal_regions(roomish)
+        labels, n = ndimage.label(roomish)
         cand = (floor | unknown) & ~level.was_on & ~level.shop
         if n > 2:
             for y, x in zip(*utils.isin(objs, G.STAIR_UP, G.STAIR_DOWN).nonzero()):

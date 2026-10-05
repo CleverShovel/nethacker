@@ -2,6 +2,7 @@ from collections import defaultdict
 from itertools import product
 
 import numpy as np
+from scipy import signal
 
 from ..glyph import G, MON
 from .. import jf_config, utils
@@ -386,15 +387,11 @@ def goto_action(agent, priority, monsters):
 
 
 def get_corridors_priority_map(walkable):
-    def neighborhood_sum(mask):
-        padded = np.pad(mask.astype(int), 1, mode='symmetric')
-        return sum(padded[dy:dy + mask.shape[0], dx:dx + mask.shape[1]]
-                   for dy in range(3) for dx in range(3))
-
-    wall_count = neighborhood_sum(~walkable)
+    k = np.array([[1, 1, 1], [1, 1, 1], [1, 1, 1]])
+    wall_count = signal.convolve2d((~walkable).astype(int), k, boundary='symm', mode='same')
     corridor_mask = (wall_count == 6).astype(int)
     corridor_mask[~walkable] = 0
-    corridor_dilated = neighborhood_sum(corridor_mask)
+    corridor_dilated = signal.convolve2d(corridor_mask.astype(int), k, boundary='symm', mode='same')
     return corridor_mask + corridor_dilated >= 1
 
 

@@ -43,6 +43,7 @@ import math
 import re
 
 from . import mondata
+from .incoming_harm import IncomingHarm
 
 # ---------------------------------------------------------------- troubles (pray.c:25-50 ranks)
 TROUBLE_STONED = 14
@@ -246,6 +247,7 @@ class PrayerModel:
         self.timeout_shift = 0       # wishes since the last prayer
         self.timeout_zero_turn = None
         self.hp_history = []         # (turn, lowest hp seen that turn), last 8 turns
+        self.incoming_harm = IncomingHarm()
         self._last_msg_step = -1
         self.events = []             # (turn, event) for the log
         self.prayers = 0
@@ -351,6 +353,11 @@ class PrayerModel:
             self._luck_timeouts(self.last_turn, turn)
             self.last_turn = turn
         hp = bl.hitpoints
+        # Use the observed form, not Character's previous-turn polymorph bookkeeping.
+        poly = agent.character.prop.polymorph
+        form = int(agent.glyphs[bl.y, bl.x]) if poly else None
+        context = (bl.dungeon_number, bl.level_number, bl.max_hitpoints, form)
+        self.incoming_harm.observe(turn, hp, context, agent.message)
         if not self.hp_history or self.hp_history[-1][0] != turn:
             self.hp_history.append((turn, hp))
             if len(self.hp_history) > 8:
@@ -537,6 +544,10 @@ class PrayerModel:
         return sum(p * (l + 1.0) / (l + 2.0) for l, p in lucks) / tot
 
     # ------------------------------------------------------------ threat
+    def unseen_attack_dps(self):
+        """Recent HP loss supported by messages from an uninspectable attacker."""
+        return self.incoming_harm.damage_per_turn(self.agent.blstats.time)
+
     def death_probability(self, turns=3, helpless=False):
         """P(the hostiles in reach deal >= current HP within `turns` turns), mhitu.c melee rules."""
         agent = self.agent
@@ -571,6 +582,15 @@ class PrayerModel:
             (t0, h0), (t1, h1) = self.hp_history[max(0, len(self.hp_history) - 4)], self.hp_history[-1]
             if t1 > t0 and h0 > h1:
                 mean = max(mean, 0.75 * (h0 - h1) / (t1 - t0) * turns)
+        # The visible-monster table cannot describe an unseen attacker. Share
+        # this evidence with the exit comparison; do not add it to table damage
+        # (the same attack may already have been counted there).
+        observed = self.unseen_attack_dps()
+        if observed > 0:
+            mean = max(mean, 0.75 * observed * turns)
+            # Unknown attacks have uncertain damage, unlike the old variance=1
+            # fallback. Keep a broad per-turn distribution for this estimate.
+            var = max(var, observed * observed * turns)
         if mean <= 0:
             return 0.0
         sd = math.sqrt(max(var, 1.0))

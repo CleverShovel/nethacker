@@ -1,13 +1,19 @@
 {
   "schema": "nethackers.solution/v1",
-  "name": "private-leader-69ba-samurai-start-rank+wiz-spells",
-  "root": ".",
+  "name": "jawfish-s22-prayermodel-arcdig+wiz-lowhp",
+  "root": "autoascend",
   "parents": [
-    "github.com/alexeyshmelev/nethacker@43141c2eaac53525276efbba6b4e4084ff25bbec"
+    "github.com/PetrAnokhin/nethacker@5c1186c8051ca8a885b79216d8dde7aa13e28594"
   ],
   "influences": [
-    "github.com/daglar-dragomirov/nethacker@69baf4943e2f47a23715b3814438b180c3c64b75",
-    "github.com/daglar-dragomirov/nethacker@8ce023a8f681e7366d5f54ca419f314ac874ac59"
+    "github.com/DT6A/nethacker@59ce30c509ef568366fe846afeba03dede939339",
+    "github.com/daglar-dragomirov/nethacker@14626734f3d8a0702b52e67996ba86b57ef0b852",
+    "github.com/daglar-dragomirov/nethacker@c131c7c377fc36b84b2c969aee4b40ff9ec6e653",
+    "github.com/daglar-dragomirov/nethacker@cb527267cc6e3562ea8e02ccc09c90ff17fe8ccf",
+    "github.com/kefirski/nethacker@5b7f1ebb452945da5d76862ce21d8b1a0053c0f5",
+    "github.com/kefirski/nethacker@91cc604d54aec632e67f8f21680319ac7e77a2fd",
+    "github.com/kenforthewin/nethack_astra@38b1a38b340d4cb154fe5e4411b2819dc407d5e3",
+    "github.com/vkurenkov/nethacker@f15bb8c8e01d905d1946e32bfd2558e17394eab6"
   ],
   "entrypoint": "bot.py"
 }

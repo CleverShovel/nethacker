@@ -74,6 +74,38 @@ def _first_target(agent, monsters, dy, dx):
     return None
 
 
+def _overshoot_unsafe(agent, monsters, dy, dx, dist):
+    """bhit carries a force bolt 6-13 squares on past the first monster it hits (-3 range per hit), so another figure
+    on the line gets 2d12 as well. A peaceful shopkeeper, priest or watchman hit that way turns hostile and kills a
+    Wizard (shopkeeper deaths: 0.6% of the leader's games, 3.6% of the force bolt build's, 9.7% of the armor-budget
+    build's). True when a monster glyph that is not a known hostile stands further down the line, or a shopkeeper is
+    in sight close by."""
+    if not cfg.OVERSHOOT_GUARD:
+        return False
+    y0, x0 = agent.blstats.y, agent.blstats.x
+    if cfg.SHOP_GUARD_DIST:
+        ys, xs = np_nonzero_isin(agent.glyphs, G.SHOPKEEPER)
+        for sy, sx in zip(ys, xs):
+            if max(abs(sy - y0), abs(sx - x0)) <= cfg.SHOP_GUARD_DIST:
+                return True
+    walkable = agent.current_level().walkable
+    hostile = {(m[1], m[2]) for m in monsters}
+    for d in range(dist + 1, 14):
+        y, x = y0 + dy * d, x0 + dx * d
+        if not (0 <= y < agent.glyphs.shape[0] and 0 <= x < agent.glyphs.shape[1]):
+            break
+        glyph = agent.glyphs[y, x]
+        if glyph in G.MONS and glyph not in G.PETS and (y, x) not in hostile:
+            return True
+        if not walkable[y, x] and glyph not in G.MONS:
+            break
+    return False
+
+
+def np_nonzero_isin(glyphs, group):
+    return utils.isin(glyphs, group).nonzero()
+
+
 def _retained(ch, spell):
     """False once the spell is forgotten ('(gone)' in the menu after 20000 turns): casting it then only stuns and
     confuses ('Your knowledge of this spell is twisted')."""
@@ -106,6 +138,8 @@ def get_potential_spell_usages(agent, monsters, dy, dx):
     if target is None:
         return []
     dist, monster = target
+    if _overshoot_unsafe(agent, monsters, dy, dx, dist):
+        return []
     mon = monster[3]
     hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
     if mon.mname in fh.WEAK_MONSTERS and hp_ratio > cfg.CAST_WEAK_HP_RATIO:
@@ -259,7 +293,15 @@ def choose_self_spell(agent):
 
     missing = bl.max_hitpoints - bl.hitpoints
     frac = bl.hitpoints / max(bl.max_hitpoints, 1)
-    if cfg.HEAL_ENABLE and missing >= cfg.HEAL_MIN_MISSING and (
+    # a safe prayer at critically low HP restores everything (pray.c TROUBLE_HIT): leave that to the prayer code below
+    # the hook rather than spend a turn on a d(6,4) heal with monsters adjacent
+    prayer_ok = False
+    if cfg.HEAL_DEFER_TO_PRAYER:
+        try:
+            prayer_ok = bool(agent._critically_low_hp() and agent.is_safe_to_pray(100))
+        except Exception:
+            prayer_ok = False
+    if cfg.HEAL_ENABLE and not prayer_ok and missing >= cfg.HEAL_MIN_MISSING and (
             (frac <= cfg.HEAL_HP_FRAC and near(cfg.HEAL_NEAR_DIST)) or frac <= cfg.HEAL_ALONE_FRAC):
         if missing >= cfg.EXTRA_HEAL_MISSING and _usable(agent, 'extra healing', cfg.HEAL_MAX_FAIL):
             return 'extra healing'

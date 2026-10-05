@@ -21,10 +21,6 @@ class Bot:
         self._driver = AutoAscendDriver()
 
     def reset(self, initial_observation: Mapping[str, Any]) -> None:
-        status = bytes(initial_observation["tty_chars"][-2]).decode("ascii", "replace")
-        if " the Hatamoto" in status:
-            from arena_adapter_s8ce023a import AutoAscendDriver as SamuraiDriver
-            self._driver = SamuraiDriver()
         self._driver.reset(initial_observation)
 
     def act(self, observation: Mapping[str, Any]) -> int:

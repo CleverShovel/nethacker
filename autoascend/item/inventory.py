@@ -1147,7 +1147,7 @@ class Inventory:
             yield False  # TODO: only for handless monsters (which cannot write)
 
         self.skip_engrave_counter -= 1
-        if self.agent.character.prop.blind or self.skip_engrave_counter > 0 or self.agent.no_free_hand():
+        if self.agent.character.prop.blind or self.skip_engrave_counter > 0 or self.agent.hands_welded():
             yield False
             return
         yielded = False
@@ -1239,8 +1239,6 @@ class Inventory:
 
     def _engrave_single_wand(self, item):
         """ Returns possible objects or None if current tile not suitable for identification."""
-        # WISH_TELEPORT_ROUTE: a wish prompt during the engrave-test comes from a wand of wishing (>= 2 wishes)
-        self.agent._last_wand_use_step = self.agent.step_count
 
         def msg():
             return self.agent.message

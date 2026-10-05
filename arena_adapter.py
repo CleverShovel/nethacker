@@ -156,6 +156,7 @@ class AutoAscendDriver:
         self._agent.resumed_game = not fresh_game
         if not fresh_game and previous is not None:
             self._agent.previous_character = previous.character
+            self._agent.recovery.adopt(previous.recovery)
         # the prayer state survives a restart: a fresh agent took the game for prayer-free and could pray
         # again at once (pray.c: too soon -> Luck -3 and an angry god)
         try:
@@ -166,6 +167,12 @@ class AutoAscendDriver:
                 self._agent.last_prayer_turn = previous.last_prayer_turn
                 self._agent.prayer_failed = previous.prayer_failed
                 self._agent.prayer_hold_until = previous.prayer_hold_until
+                # These turn-based guards belong to the game, not the worker.
+                # Copy guards and diagnostics, never an interrupted cast generator.
+                self._agent.spell_healing.adopt(previous.spell_healing)
+                self._agent._last_resort_stairs_turn = previous._last_resort_stairs_turn
+                self._agent.global_logic.dive._retreat_blocked_until = (
+                    previous.global_logic.dive._retreat_blocked_until)
                 if getattr(previous, 'prayer_model', None) is not None:
                     previous.prayer_model.adopt(self._agent)
                     self._agent.prayer_model = previous.prayer_model

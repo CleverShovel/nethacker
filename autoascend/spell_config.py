@@ -16,6 +16,10 @@ CAST_BASE = 17
 CAST_DANGEROUS_BONUS = 3
 CAST_LOWHP_BONUS = 0
 CAST_DISTANCE_PENALTY = 1.5
+# the bolt flies on past its target (range 6-13): do not cast when an unknown / peaceful monster stands further down the
+# line, or a shopkeeper is in sight within SHOP_GUARD_DIST squares (a hit shopkeeper turns hostile and kills a Wizard)
+OVERSHOOT_GUARD = True
+SHOP_GUARD_DIST = 10
 CAST_PET_PENALTY = 40
 CAST_PEACEFUL_PENALTY = 200
 
@@ -31,6 +35,7 @@ HEAL_ALONE_FRAC = 0.34
 HEAL_MIN_MISSING = 8          # healing is d(6,4): not worth Pw for less
 EXTRA_HEAL_MISSING = 22       # extra healing (d(6,8), 15 Pw) when at least this much is missing and Pw allows
 HEAL_MAX_FAIL = 0.25
+HEAL_DEFER_TO_PRAYER = True   # critically low HP with a safe prayer: the prayer (full heal) goes first
 PROTECT_ENABLE = True         # protection: AC bonus of log2(XL)+1 on the first cast, decays 1 per 10 turns
 PROTECT_MIN_XL = 3            # XL1 gives +1 only
 PROTECT_DIST = 2              # a hostile this close (walking distance)
@@ -63,7 +68,7 @@ REFRESH_AT_PCT = 10
 
 # ---- armor budget: do not wear the armor whose spell penalty (metallic suit/helmet/gloves/boots, shields) pushes the
 # failure of a level 1 spell above ARMOR_MAX_FAIL; the AC lost is minimal first (get_best_armorset)
-ARMOR_BUDGET = True
+ARMOR_BUDGET = False
 ARMOR_ROLES = ('WIZARD',)
 ARMOR_MAX_FAIL = 0.20
 

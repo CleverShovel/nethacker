@@ -907,7 +907,6 @@ class Inventory:
 
         best_items = [None] * O.ARM_NUM
         best_ac = [None] * O.ARM_NUM
-        _spell_cands = {}
         for item in items:
             if not item.is_armor() or not item.is_unambiguous():
                 continue
@@ -927,13 +926,10 @@ class Inventory:
             if self.agent.character.role == Character.MONK and slot == O.ARM_SUIT:
                 continue
 
-            _spell_cands.setdefault(slot, []).append((ac, item))
             if best_ac[slot] is None or best_ac[slot] > ac:
                 best_ac[slot] = ac
                 best_items[slot] = item
 
-        from .. import spell_magic as _sm
-        best_items, best_ac = _sm.limit_spell_penalty(self, best_items, best_ac, _spell_cands)
         if return_ac:
             return best_items, best_ac
         return best_items
@@ -945,8 +941,6 @@ class Inventory:
             self.pickup_and_drop_items()
                 .before(self.check_containers())
                 .before(self.wear_best_stuff())
-                .before(self.learn_spells())
-                .before(self.read_new_spellbook())
                 .before(self.wand_engrave_identify())
                 .before(self.use_spare_wishes())
                 .before(self.wear_life_saving())
@@ -1765,7 +1759,3 @@ class Inventory:
             yield False
 
         yield from self.arrange_items().strategy()
-
-
-from .. import spell_magic as _spell_magic  # noqa: E402
-_spell_magic.install(Inventory)

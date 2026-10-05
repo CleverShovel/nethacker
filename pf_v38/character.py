@@ -428,11 +428,9 @@ class Character:
     def parse_spellcast_view(self):
         self.known_spells = dict()
         self.spell_fail_chance = dict()
-        self.spell_level = dict()
-        self.spell_retention = dict()
 
         # TODO: parse for other spellcaster classes
-        if self.role not in (self.HEALER, self.WIZARD, self.PRIEST, self.MONK):
+        if self.role not in (self.HEALER,):
             return
 
         with self.agent.atom_operation():
@@ -450,14 +448,11 @@ class Character:
                                      r'(' + '|'.join(ALL_SPELL_CATEGORIES) + ') *' +
                                      r'([0-9]*)\% *' +
                                      r'([0-9]*\%|\(gone\))', line)
-                if len(matches) != 1:
-                    continue
+                assert len(matches) == 1, (matches, line)
                 letter, spell_name, level, category, fail, retention = matches[0]
                 assert len(letter) == 1, letter
                 self.known_spells[spell_name] = letter
                 self.spell_fail_chance[spell_name] = int(fail) / 100
-                self.spell_level[spell_name] = int(level or 0)
-                self.spell_retention[spell_name] = 0 if '(gone)' in retention else int(retention.rstrip('%') or 0)
         self.agent.step(A.Command.ESC)
 
     def parse_enhance_view(self):

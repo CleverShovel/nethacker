@@ -215,7 +215,7 @@ HUNT_MIN_XL = 8
 # With a digging tool the dive is a few turns per level and XL matters much less (s7 public seed 10:
 # Dlvl 4 -> 26 in ~200 turns of digging, past Medusa): dive as soon as one is in hand from this XL,
 # and keep one during the tour (it drops them for lighter loot).
-DIG_DIVE_XL = 7
+DIG_DIVE_XL = 8
 KEEP_TOOL_IN_TOUR = False
 # The portal sweep (Home 1 = 0.366) costs ~1500 turns of exploring the level; digging reaches
 # Dlvl 20+ (0.38+) within a few hundred turns, so no sweep while holding a digging tool.
@@ -322,7 +322,7 @@ KILL_PRAYER_HOLD = 600
 # the Dlvl-1 grind (and the rest of the tour) hunts peaceful dwarves from this XL (0: off) and keeps the tool:
 # dwarves spawn on Dlvl 1 from XL 7 (difficulty 4 <= (1 + XL) / 2); 51 of 90 baseline grinds heard one
 # digging there ('You hear crashing rock.') and 5 of those dives still never got a tool
-GRIND_HUNT_XL = 5
+GRIND_HUNT_XL = 0
 GRIND_HUNT_DIGGERS_ONLY = False
 # the tool-less dive's Mines route explores Dlvl 2-4 only until the branch '>' is known (see _search_branch);
 # the tour-mode pick trip (jf_config.PICK_TRIP_XL) too, through trip_branch_strategy

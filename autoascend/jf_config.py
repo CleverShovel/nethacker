@@ -83,7 +83,7 @@ GRIND_DEEP_LEVEL = 3
 NO_DIP_WITH_TOOL = False
 # the grind's main-dungeon level by XL, {min XL: Dlvl} (empty: Dlvl 1 throughout; overrides GRIND_DEEP_*):
 # e.g. {5: 3, 7: 2} keeps the random-monster cap (depth + XL) / 2 at 4 from XL 5 (global_logic._grind_level)
-GRIND_LEVELS = {}
+GRIND_LEVELS = {5: 3, 7: 2}
 # the tour skips to its next milestone after this many turns within 8 squares of one spot on one level
 # (0: never). Stalls held 12 of 90 games for 1500-14000 turns, fainting through hunger prayers.
 TOUR_STALL_TURNS = 1500

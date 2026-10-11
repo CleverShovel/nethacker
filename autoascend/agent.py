@@ -1,4 +1,5 @@
 import contextlib
+import traceback
 import re
 import sys
 from collections import namedtuple, Counter, defaultdict
@@ -21,6 +22,7 @@ from .glyph import MON, C, Hunger, G, SHOP, SS
 from .item import Item, flatten_items
 from .item.inventory import Inventory
 from .level import Level
+from .nhmodel.prayer import PrayerModel, rnz_cdf
 from .monster_tracker import MonsterTracker, disappearance_mask
 from .stats_logger import StatsLogger
 from .strategy import Strategy
@@ -113,6 +115,12 @@ class Agent:
         self.last_cast_fail_turn = defaultdict(lambda: -float('inf'))
 
         self.stats_logger = StatsLogger()
+
+        # PRAYER_MODEL (nhmodel/prayer.py): pray.c's own odds replace the fixed prayer gaps where they differ
+        try:
+            self.prayer_model = PrayerModel(self) if jf_config.PRAYER_MODEL else None
+        except Exception:
+            self.prayer_model = None
 
     def log(self, msg):
         if jf_log.enabled():
@@ -526,6 +534,12 @@ class Agent:
 
         self.blstats = BLStats(*self.last_observation['blstats'])
         self.glyphs = self.last_observation['glyphs']
+
+        if self._prayer_model_active():
+            try:
+                self.prayer_model.observe()
+            except Exception:
+                self._prayer_model_error()
 
         self.stats_logger.log_cumulative_value('max_turns_on_position',
                                                key=(self.current_level().dungeon_number,
@@ -987,8 +1001,11 @@ class Agent:
         # after a failed prayer the god stays angry (pray.c: a too-soon prayer sets ugangr, Luck -3):
         # 45 of 46 prayers made within 500 turns of a failure failed again, some summoning a minion
         # ('Thou durst call upon me? Then die, mortal!'); half of those 2000+ turns later worked
+        model_gate = self._prayer_model_gate(certain_death)
+        if model_gate is False:
+            return False
         if not certain_death and self.prayer_failed and self.last_prayer_turn is not None and \
-                self.blstats.time - self.last_prayer_turn < self.PRAYER_FAILURE_WAIT:
+                self.blstats.time - self.last_prayer_turn < self.PRAYER_FAILURE_WAIT and model_gate is None:
             return False
         return (
                 (self.last_prayer_turn is None and self.blstats.time > (100 if jf_config.EXACT_PRAYER else 300)) or
@@ -1212,19 +1229,176 @@ class Agent:
 
     def pray(self):
         gap = None if self.last_prayer_turn is None else self.blstats.time - self.last_prayer_turn
+        model_note, limit = '', None
+        if self._prayer_model_active():
+            try:
+                model = self.prayer_model
+                limit = model.trouble_limit()
+                model_note = f' model[{model.summary()} p_answered={model.p_answered(limit):.2f}]'
+            except Exception:
+                self._prayer_model_error()
         self.log(f'PRAY hp={self.blstats.hitpoints}/{self.blstats.max_hitpoints} hunger={self.blstats.hunger_state} '
-                 f'gap={gap} reason={self._pray_reason}')
+                 f'gap={gap} reason={self._pray_reason}{model_note}')
         self._pray_reason = None
+        turn_before = self.blstats.time
         history_len = len(self._message_history)
         self.step(A.Command.PRAY)
         self.last_prayer_turn = self.blstats.time
         messages = ' '.join(self._message_history[history_len:] + [self.message])
+        failed = answered = False
         if any(msg in messages for msg in self.PRAYER_FAILURE_MESSAGES):
-            self.prayer_failed = True
+            self.prayer_failed = failed = True
         elif any(msg in messages for msg in self.PRAYER_SUCCESS_MESSAGES):
             self.prayer_failed = False  # pleased() only runs with the god appeased and Luck >= 0
+            answered = True
+        if limit is not None and self._prayer_model_active():
+            try:
+                self.prayer_model.on_prayer(turn_before, messages, answered, failed, limit)
+                self.log(f'PRAY result {"FAILED" if failed else "ok"} model[{self.prayer_model.summary()}] '
+                         f'prayers={self.prayer_model.prayers} failures={self.prayer_model.failures}')
+            except Exception:
+                self._prayer_model_error()
         # TODO: return value
         return True
+
+    ######## PRAYER MODEL (nhmodel/prayer.py: pray.c's odds; 3 errors -> the old rules for the rest of the game)
+
+    def _prayer_model_active(self):
+        model = getattr(self, 'prayer_model', None)
+        return model is not None and not model.disabled
+
+    def _prayer_model_error(self):
+        model = getattr(self, 'prayer_model', None)
+        if model is None:
+            return
+        model.errors += 1
+        self.log(f'PRAYER MODEL error #{model.errors}: {traceback.format_exc(limit=3)!r}')
+        if model.errors >= 3:
+            model.disabled = True
+
+    def _prayer_model_gate(self, certain_death):
+        """is_safe_to_pray's model check: False when pray.c says the prayer must fail whatever the gap --
+        p_type 1 (can_pray, pray.c:1823): an angry god (u.ugangr, which only a sacrifice lowers), Luck < 0
+        (own pet killed, murder, a guilty unicorn, cannibalism, a broken mirror, Friday 13th) or a negative
+        alignment record. True when the model has a verdict of its own on a past failure (the fixed
+        PRAYER_FAILURE_WAIT is then replaced: a failure the timeout explains means ugangr > 0 and no prayer
+        ever works again; one that Luck explains is over once Luck has timed out). None: no opinion."""
+        if not self._prayer_model_active():
+            return None
+        try:
+            model = self.prayer_model
+            naughty = model.naughty()
+            if certain_death:
+                # a prayer that cannot be answered doesn't beat dying either, but costs nothing: old rule
+                return None
+            if naughty >= 0.5:
+                return False
+            if self.prayer_failed:
+                return True  # p_ugangr < 0.5 here: the failure came from Luck/record trouble that is over
+            return None
+        except Exception:
+            self._prayer_model_error()
+            return None
+
+    # the old HP rule prayed > 500 turns after the last prayer: P(rnz(350) <= 200 + 501), pray.c:1220, 1819
+    SAFE_PRAYER_P = rnz_cdf(350, 200 + 501)
+
+    def _prayer_holds_ok(self):
+        """is_safe_to_pray's non-timeout vetoes: Gehennom (the god can't help, pray.c:1901-1906) and the
+        dive's holds (murder, alignment budget)."""
+        if jf_config.GEHENNOM_DIVE and self.current_level().dungeon_number == 1:
+            return False
+        return self.blstats.time >= self.prayer_hold_until
+
+    def _hp_prayer_due(self, low_hp_old, poly_buffer):
+        """The low-HP prayer. With the model: only in pray.c's TROUBLE_HIT window (critically_low_hp; the
+        DT6A 'HP < 12' rule prayed outside it, where only ublesscnt == 0 answers: 1 in 3 of those prayers
+        fail at a 500 gap and anger the god for good); 'hp' when the timeout posterior is as safe as the old
+        500-turn rule (from turn ~103 for the first prayer: u_init.c:644 starts it at 300, major trouble
+        needs <= 200), 'hp-doom' at any gap when the prayer beats the fight (PrayerModel.hp_decision)."""
+        if self._prayer_model_active() and not poly_buffer:
+            try:
+                if not self._prayer_holds_ok():
+                    return False
+                model = self.prayer_model
+                decision = model.hp_decision(self.SAFE_PRAYER_P, jf_config.DOOM_MARGIN, jf_config.DOOM_MIN_P)
+                if decision == 'hp-doom' and not self._doom_prayer_beats_exits(model):
+                    decision = None
+                if decision is not None:
+                    gap = None if self.last_prayer_turn is None else self.blstats.time - self.last_prayer_turn
+                    self._pray_reason = f'{decision} p_hp={model.last_p_hp:.2f} p_die3={model.last_p_die:.2f}' \
+                        if decision == 'hp-doom' else 'hp'
+                    if decision == 'hp-doom':
+                        self.log(f'DOOM prayer: gap {gap} p_hp={model.last_p_hp:.2f} p_die3={model.last_p_die:.2f}')
+                    return True
+                return False
+            except Exception:
+                self._prayer_model_error()
+        return self.is_safe_to_pray(500) and low_hp_old
+
+    def _emergency_downstairs_available(self):
+        """The exit both the doom comparison and emergency executor can use."""
+        level = self.current_level()
+        return (jf_config.LAST_RESORT and
+                level.objects[self.blstats.y, self.blstats.x] in G.STAIR_DOWN and
+                level.dungeon_number != Level.SOKOBAN and
+                self.blstats.time - self._last_resort_stairs_turn > 20 and
+                self.blstats.carrying_capacity < 4)
+
+    def _doom_prayer_beats_exits(self, model):
+        """Exits that beat a long-shot prayer: the down stairs underfoot (the last resort takes them: they
+        bank a level and shed every non-follower, dog.c:keepdogs), and a fresh dust Elbereth when everything
+        in reach respects it (monmove.c:onscary; the engraving is legible 0.96^8 = 72% of the time,
+        engrave.c:1052-1058, and the engrave turn itself is one more round of attacks)."""
+        y, x = self.blstats.y, self.blstats.x
+        near = [m for m in self.get_visible_monsters() if max(abs(m[1] - y), abs(m[2] - x)) <= 2]
+        unseen_harm = model.unseen_attack_dps() > 0
+        if not near and not unseen_harm:
+            return False
+        if self._emergency_downstairs_available():
+            return False
+        dive = self.global_logic.dive
+        engraving = (self.inventory.engraving_below_me or '').lower()
+        if not unseen_harm and engraving != 'elbereth' and not self.character.prop.blind and self.can_engrave() and \
+                not any(dive._ignores_elbereth(m[3]) for m in near):
+            p_elbereth = 0.72 * (1.0 - model.death_probability(turns=1))
+            if model.last_p_hp < p_elbereth:
+                return False
+        return True
+
+    def _faint_doom_prayer_due(self):
+        """Fainting beside hostiles (PrayerModel.faint_decision): the fixed Fainting gap (1100) waited through
+        faints next to a goblin at a 979-turn gap and a little dog at 1087 (both died helpless, prayers
+        answered 94-96% of the time there). Only where the timeout is as safe as the old HP rule."""
+        if not self._prayer_model_active() or self.blstats.hunger_state < Hunger.FAINTING or self.prayer_failed:
+            return False
+        try:
+            if not self._prayer_holds_ok():
+                return False
+            ok, p_ok, p_die = self.prayer_model.faint_decision(self.SAFE_PRAYER_P, jf_config.DOOM_MARGIN)
+            if ok:
+                gap = None if self.last_prayer_turn is None else self.blstats.time - self.last_prayer_turn
+                self._pray_reason = f'faint-doom p_ok={p_ok:.2f} p_die8={p_die:.2f}'
+                self.log(f'DOOM faint prayer: gap {gap} p_ok={p_ok:.2f} p_die8={p_die:.2f}')
+                return True
+        except Exception:
+            self._prayer_model_error()
+        return False
+
+    def _status_prayer_due(self):
+        """Stoned, slimed, strangled or sick (pray.c TROUBLE_STONED..TROUBLE_SICK, each fatal within 5-20
+        turns): the old rule waited for a 100-turn gap; the model prays at any gap where the timeout
+        posterior leaves a real chance (22% right after a prayer, rnz(350) <= 200)."""
+        if not self._prayer_model_active():
+            return False
+        try:
+            p = self.prayer_model.status_decision()
+            if p >= 0.05:
+                self._pray_reason = f'status p={p:.2f}'
+                return True
+        except Exception:
+            self._prayer_model_error()
+        return False
 
     def open_door(self, y, x):
         with self.panic_if_position_changes():
@@ -2314,7 +2488,8 @@ class Agent:
                     self.log('EMERGENCY stoning: eating a lizard corpse')
                     self.inventory.eat(lizards[0])
                     return
-            if self.current_level().dungeon_number != 1 and self.is_safe_to_pray(100, certain_death=True):
+            if self.current_level().dungeon_number != 1 and \
+                    (self.is_safe_to_pray(100, certain_death=True) or self._status_prayer_due()):
                 yield True
                 self.log(f'EMERGENCY deadly status {deadly:#x}: praying')
                 self.pray()
@@ -2330,7 +2505,7 @@ class Agent:
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
         if (
-                (self.blstats.hitpoints < (0.5 if (self.blstats.hitpoints < 0.5 * self.blstats.max_hitpoints and any(max(abs(m[1] - self.blstats.y), abs(m[2] - self.blstats.x)) <= 3 for m in self.get_visible_monsters())) else 1 / 3) * self.blstats.max_hitpoints
+                (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
                  or self.blstats.hitpoints < 8) and items and not poly_buffer
         ):
             yield True
@@ -2359,9 +2534,19 @@ class Agent:
                        not self.character.prop.polymorph))
         if poly_buffer:
             low_hp = False
+        hp_prayer = self._hp_prayer_due(low_hp, poly_buffer)
+        if low_hp and not hp_prayer and self._prayer_model_active() and \
+                self.prayer_model.unseen_attack_dps() > 0 and self._emergency_downstairs_available():
+            yield True
+            self.log('EMERGENCY unseen attack: down the stairs')
+            self._last_resort_stairs_turn = self.blstats.time
+            self.global_logic.dive._retreat_blocked_until = self.blstats.time + 20
+            self.move('>')
+            return
         if (
-                (self.is_safe_to_pray(500) and low_hp)
+                hp_prayer
                 or self.fainting_prayer_due()
+                or self._faint_doom_prayer_due()
                 or self.threat_prayer_due()
                 or (not self.prayer_failed and self.blstats.hunger_state >= Hunger.WEAK and
                     self.is_safe_to_pray(self._hunger_prayer_gap()) and not self._eat_before_praying())

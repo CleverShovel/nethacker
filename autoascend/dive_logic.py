@@ -69,8 +69,8 @@ MINES_REQUIRED_XL = {}
 # hand-over from AutoAscend's levelling tour to the dive
 DIVE_XL = 8
 DIVE_TURN = 10 ** 9
-ELBERETH_REST_BELOW = 0.55
-ELBERETH_REST_UNTIL = 0.9
+ELBERETH_REST_BELOW = 0.4
+ELBERETH_REST_UNTIL = 0.85
 # breathers, spitters and casters: Elbereth doesn't stop them hurting you from a distance
 RANGED_MONSTERS = frozenset((
     'winter wolf cub', 'winter wolf', 'hell hound pup', 'hell hound', 'red naga', 'black naga',
@@ -82,11 +82,11 @@ RANGED_MONSTERS = frozenset((
 # for random spawns instead of descending. 0 disables.
 FARM_TURNS = 0
 # retreat: below this HP fraction, with prayer/Elbereth unavailable, climb the up stairs if close
-RETREAT_BELOW = 0.5
+RETREAT_BELOW = 0.35
 RETREAT_MAX_DISTANCE = 12
 ARRIVAL_WATCH_TURNS = 30       # how long after arriving a crowd still sends us back up
 # ...or when this fraction of max HP was lost within RETREAT_WINDOW turns
-RETREAT_FAST_LOSS = 0.25
+RETREAT_FAST_LOSS = 0.3
 RETREAT_WINDOW = 3
 # arrival check: back up the stairs at once into a crowd (a b1 dive died 12 turns after walking
 # onto Dlvl 12 among a leocrotta, ogre king, soldier ants, killer bee, Woodland-elf, ...)
@@ -215,9 +215,6 @@ HUNT_MIN_XL = 8
 # With a digging tool the dive is a few turns per level and XL matters much less (s7 public seed 10:
 # Dlvl 4 -> 26 in ~200 turns of digging, past Medusa): dive as soon as one is in hand from this XL,
 # and keep one during the tour (it drops them for lighter loot).
-# hypothesis: a pick carrier (every Archeologist) that grinds Dlvl 1 on to XL 8 spends ~20k turns there and
-# 4/15 arc games died in that grind (0.02-0.05); digging from XL 7 under the sheltered dig banks Dlvl 20+ far
-# sooner. Measured arc seeds 0-14: 4.46 -> 6.32 summed (XL 6: 6.17, XL 5: 4.99). Others: no tool, unchanged.
 DIG_DIVE_XL = 7
 KEEP_TOOL_IN_TOUR = False
 # The portal sweep (Home 1 = 0.366) costs ~1500 turns of exploring the level; digging reaches
@@ -325,7 +322,7 @@ KILL_PRAYER_HOLD = 600
 # the Dlvl-1 grind (and the rest of the tour) hunts peaceful dwarves from this XL (0: off) and keeps the tool:
 # dwarves spawn on Dlvl 1 from XL 7 (difficulty 4 <= (1 + XL) / 2); 51 of 90 baseline grinds heard one
 # digging there ('You hear crashing rock.') and 5 of those dives still never got a tool
-GRIND_HUNT_XL = 0
+GRIND_HUNT_XL = 5
 GRIND_HUNT_DIGGERS_ONLY = False
 # the tool-less dive's Mines route explores Dlvl 2-4 only until the branch '>' is known (see _search_branch);
 # the tour-mode pick trip (jf_config.PICK_TRIP_XL) too, through trip_branch_strategy
@@ -1247,7 +1244,7 @@ class DiveLogic:
             yield False
         near = self._near_hostiles()
         # a lone weak monster is better killed than hidden from (engraving gives it a free hit)
-        if len(near) == 1 and getattr(near[0][3], 'difficulty', 99) <= 2 and bl.hitpoints >= 6:
+        if len(near) == 1 and getattr(near[0][3], 'mlevel', 99) <= 2 and bl.hitpoints >= 6:
             self._elbereth_resting = False
             yield False
         if not near or any(self._ignores_elbereth(m[3]) for m in near) or \

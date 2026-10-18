@@ -320,12 +320,31 @@ def _armor_slot_empty(agent, o):
     return True
 
 
+def _caster_ok(agent, o):
+    """A spellcaster (wizard, priest, monk) buys only armour with no spell penalty (spell.c percent_success)."""
+    try:
+        from .character import Character
+        role = agent.character.role
+        if role not in (Character.WIZARD, Character.PRIEST, Character.MONK):
+            return True
+        metallic = 11 <= o.metal <= 17
+        if o.sub == O.ARM_SHIELD:
+            return False
+        if o.sub == O.ARM_HELM:
+            return (not metallic) or o.name == "helm of brilliance"
+        return not metallic
+    except Exception:
+        return False
+
+
 def _test_armor(agent, item, gobj, unit):
     """A shelf piece of armour for an empty slot (SUPPLY_ARMOR; see armor_piece for which pieces count)."""
     if not jf_config.SUPPLY_ARMOR:
         return False
     o = armor_piece(item)
     if o is None or o.wt > ARMOR_MAX_WT:
+        return False
+    if not _caster_ok(agent, o):
         return False
     try:
         return _armor_slot_empty(agent, o)

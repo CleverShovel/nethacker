@@ -2687,7 +2687,7 @@ class Agent:
         st = self._fight_stall
         key = self.current_level().key()
         # contact, or deliberately holding out on Elbereth / hurt: not a stall to break
-        contact = best_action[0] in ('melee', 'kick', 'zap', 'wait', 'elbereth') or \
+        contact = best_action[0] in ('melee', 'kick', 'zap', 'cast', 'wait', 'elbereth') or \
             bl.hitpoints < 0.5 * bl.max_hitpoints
         names = frozenset(m[3].mname for m in monsters if not utils.adjacent((bl.y, bl.x), (m[1], m[2])))
         ended = None if st is None else 'gap' if bl.time - st[2] > 10 else 'contact' if contact else \
@@ -2886,7 +2886,7 @@ class Agent:
                 choke_orig = actions
                 actions, choke_note = chokepoint.adjust(self, monsters, actions, dis)
             if allow_attack_all:
-                attack_actions = [a for a in actions if a[1][0] in ('melee', 'kick', 'ranged', 'zap')]
+                attack_actions = [a for a in actions if a[1][0] in ('melee', 'kick', 'ranged', 'zap', 'cast')]
                 if attack_actions:
                     actions = attack_actions
 
@@ -3226,6 +3226,13 @@ class Agent:
         elif best_action[0] == 'hold':
             # CHOKEPOINT: on the chokepoint, let the pack come to us
             self.search()
+            return wait_counter
+        elif best_action[0] == 'cast':
+            _, dy, dx, spell, _targets = best_action
+            _pw = self.blstats.energy
+            from . import spell_magic as _spell_magic
+            _asked = _spell_magic.cast_directed(self, spell, dy, dx)
+            _spell_magic.note_cast(self, spell, _pw, not _asked, _targets)
             return wait_counter
         elif best_action[0] == 'zap':
             if len(best_action) == 5:
@@ -3579,6 +3586,12 @@ class Agent:
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
+        from . import spell_magic as _spell_magic
+        _spell_pick = _spell_magic.choose_self_spell(self)
+        if _spell_pick is not None:
+            yield True
+            _spell_magic.cast_self(self, _spell_pick)
+            return
 
         # if self.should_cast_extra_heal():
         #     yield True

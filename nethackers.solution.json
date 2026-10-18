@@ -1,14 +1,12 @@
 {
   "schema": "nethackers.solution/v1",
-  "name": "jawfish+magic+prayer+grind",
+  "name": "jawfish+tou-camera",
   "root": "autoascend",
   "parents": [
     "github.com/DT6A/nethacker@59ce30c509ef568366fe846afeba03dede939339"
   ],
   "influences": [
     "github.com/DT6A/nethacker@59ce30c509ef568366fe846afeba03dede939339",
-    "github.com/PetrAnokhin/nethacker@5c1186c8051ca8a885b79216d8dde7aa13e28594",
-    "github.com/daglar-dragomirov/nethacker@5d0d455a1585271143aa47fbd5b44c2f6dae7d4b",
     "github.com/daglar-dragomirov/nethacker@cb527267cc6e3562ea8e02ccc09c90ff17fe8ccf",
     "github.com/kenforthewin/nethack_astra@38b1a38b340d4cb154fe5e4411b2819dc407d5e3"
   ],

@@ -1,12 +1,16 @@
 import nle.nethack as nh
 
-from autoascend import objects as O
+from autoascend import jf_config, objects as O
 
 
 class InventoryItems:
     def __init__(self, agent):
         self.agent = agent
         self._previous_inv_strs = None
+        # SQ_BFS_WEIGHT (load lane): the pack weight of the last COMPLETE update, and whether an update is under way / the list
+        # was cleared (on_panic): total_weight is a partial sum then, and agent.bfs() would read it as 'a light pack'
+        self.settled_weight = None
+        self.weight_stale = True
 
         self._clear()
 
@@ -21,6 +25,7 @@ class InventoryItems:
         self.shirt = None
 
         self.total_weight = 0
+        self.weight_stale = True
 
         self.all_items = []
         self.all_letters = []
@@ -76,7 +81,8 @@ class InventoryItems:
                     self.agent.last_observation['inv_oclasses'],
                     self.agent.last_observation['inv_glyphs'],
                     self.agent.last_observation['inv_letters']):
-                item_name = bytes(item_name).decode().strip('\0')
+                # DECODE_REPLACE (safegrind lane 38): a byte that is not UTF-8 in an item's name decodes to U+FFFD instead of raising
+                item_name = bytes(item_name).decode(errors='replace' if jf_config.DECODE_REPLACE else 'strict').strip('\0')
                 letter = chr(letter)
                 if not item_name:
                     continue
@@ -86,6 +92,7 @@ class InventoryItems:
             assert len(iterable) == len(set(map(lambda x: x[-1], iterable))), \
                 'letters in inventory are not unique'
 
+            pending = None      # INV_FULL_LIST: an exception from a container check, raised once the list is complete
             for item_name, category, glyph, letter in iterable:
                 item = self.agent.inventory.item_manager.get_item_from_text(item_name, category=category,
                                                                             glyph=glyph if not nh.glyph_is_body(
@@ -113,12 +120,21 @@ class InventoryItems:
                             break
 
                 # applying a bag mid-fight wasted turns during a dive (leocrotta death); defer it
-                if (item.is_possible_container() or (item.is_container() and self._recheck_containers)) and \
+                if pending is None and \
+                        (item.is_possible_container() or (item.is_container() and self._recheck_containers)) and \
                         not (getattr(getattr(getattr(self.agent, 'global_logic', None), 'dive', None), 'diving', False)
                              and self.agent.get_visible_monsters()):
-                    self.agent.inventory.check_container_content(item)
+                    if jf_config.INV_FULL_LIST:
+                        try:
+                            self.agent.inventory.check_container_content(item)
+                        except BaseException as e:
+                            pending = e
+                            self.agent.log(f'INV_FULL_LIST: {type(e).__name__} in the container check of {letter} '
+                                           f'{item_name!r}: the list is finished before it goes up')
+                    else:
+                        self.agent.inventory.check_container_content(item)
 
-                if (self.agent.last_observation['inv_strs'] != previous_inv_strs).any():
+                if pending is None and (self.agent.last_observation['inv_strs'] != previous_inv_strs).any():
                     self.update()
                     return
 
@@ -129,6 +145,10 @@ class InventoryItems:
                 # {'speed boots': 20, 'water walking boots': 15, 'jumping boots': 20, 'elven boots': 15, 'fumble boots': 20, 'levitation boots': 15}
                 # {'luckstone': 10, 'loadstone': 500, 'touchstone': 10, 'flint': 10}
 
+            self.settled_weight = self.total_weight
+            self.weight_stale = False
+            if pending is not None:
+                raise pending
             self._recheck_containers = False
 
     def get_letter(self, item):

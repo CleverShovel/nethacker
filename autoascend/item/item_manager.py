@@ -5,6 +5,7 @@ import nle.nethack as nh
 from nle.nethack import actions as A
 
 from autoascend import objects as O, utils
+from autoascend import jf_config
 from autoascend.character import Character
 from autoascend.glyph import MON
 from autoascend.item import Item
@@ -44,6 +45,10 @@ class ItemManager:
 
         self._glyph_to_possible_wand_types = {}
         self._already_engraved_glyphs = set()
+        # WAND_ENGRAVE_TEXT: wands whose engrave test left the text prompt empty ('glows, then fades': nothing
+        # learned) and those tested with text already (the dive re-tests the first kind once)
+        self._engraved_textless = set()
+        self._engraved_text = set()
 
     def on_panic(self):
         self.update_object_glyph_mapping()
@@ -261,7 +266,10 @@ class ItemManager:
             r'^(a|an|the|\d+)'
             r'( empty)?'
             r'( (cursed|uncursed|blessed))?'
-            r'( (very |thoroughly )?(rustproof|poisoned|corroded|rusty|burnt|rotted|partly eaten|partly used|diluted|unlocked|locked|moist|wet|greased))*'
+            # 'broken': objnam.c names a box whose lock was forced or kicked open 'broken chest' (CASTLE_TREASURY's #force:
+            # oct5on s18 asserted on 'a broken chest' right after 'You succeed in forcing the lock.'); nothing else in
+            # our games breaks a lock
+            r'( (very |thoroughly )?(rustproof|poisoned|corroded|rusty|burnt|rotted|partly eaten|partly used|diluted|unlocked|locked|broken|moist|wet|greased))*'
             r'( ([+-]\d+))? '
             r"([a-zA-z0-9-!'# ]+)"
             r'( \((?:\d+ aum, )?([0-9]+:[0-9]+|no charge)\))?'   # '(20 aum, no charge)': a free glob in a shop
@@ -286,10 +294,12 @@ class ItemManager:
         # TODO: effects, uses
 
         # rings: a foocubus puts one on (s6 dive): an unparsed '(on right hand)' blinded the whole inventory
+        # (polymorphed, a ring sits 'on right foreclaw' / 'on left paw': objnam.c body_part(HAND); the assert
+        # below stalled CASTLE_POLY forms, pwc-dp12 jf27-s8)
         if info in {'being worn', 'being worn; slippery', 'wielded', 'chained to you',
                     'on right hand', 'on left hand'} or info.startswith(
                 'weapon in ') or \
-                info.startswith('tethered weapon in '):
+                info.startswith('tethered weapon in ') or re.fullmatch(r'on (right|left) [a-z ]+', info):
             equipped = True
             at_ready = False
         elif info in {'at the ready', 'in quiver', 'in quiver pouch', 'lit'}:
@@ -479,7 +489,10 @@ class ItemManager:
         if glyph is not None:
             assert glyph in ret_glyphs
             pos = O.possibilities_from_glyph(glyph)
-            if objs[0].name not in ['elven broadsword', 'runed broadsword']:
+            # TOOL_GLYPH_ID: the glyph names one tool of the several that read alike ('lamp' -> magic lamp), so the text's
+            # candidates are a superset of the glyph's
+            if objs[0].name not in ['elven broadsword', 'runed broadsword'] and \
+                    not (jf_config.TOOL_GLYPH_ID and O.get_category(objs[0]) == nh.TOOL_CLASS):
                 assert all(map(lambda o: o in pos, objs)), (objs, pos)
             ret_glyphs = [glyph]
             objs = sorted(set(objs).intersection(O.possibilities_from_glyph(glyph)))
@@ -525,6 +538,11 @@ class ItemManager:
             name = name[len('small '):]
         elif name == 'knives':
             name = 'knife'
+        elif jf_config.ROBUST_FIXES and name.endswith(' dragon scales') and \
+                (name.startswith('set of ') or name.startswith('sets of ')):
+            # objnam.c xname: 'set of <color> dragon scales' (makeplural: 'sets of ...'); objects.c names them
+            # '<color> dragon scales', so every look at them asserted (PANIC loops in 12 deep dev games)
+            name = name.split(' of ', 1)[1]
 
         # object identified (look on names)
         obj_ids = set()
@@ -556,6 +574,11 @@ class ItemManager:
             ('s', nh.FOOD_CLASS),
             ('s', nh.COIN_CLASS),
         ]
+        if jf_config.ROBUST_FIXES2:
+            # a punishment ball and chain ('a heavy iron ball (chained to you)', 'an iron chain'): no appearance, and
+            # no name match in these classes either, so the category check asserted on every look at them
+            prefixes = prefixes + [('', nh.BALL_CLASS), ('', nh.CHAIN_CLASS)]
+            suffixes = suffixes + [('s', nh.BALL_CLASS), ('s', nh.CHAIN_CLASS)]
         for i in range(nh.NUM_OBJECTS):
             for pref, c in prefixes:
                 if ord(nh.objclass(i).oc_class) == c:
@@ -636,6 +659,7 @@ class ItemManager:
             glyph = obj_id + nh.GLYPH_OBJ_OFF
             objs = sorted(set.union(*[set(O.possibilities_from_glyph(i)) for i in glyphs]))
             assert name == 'runed broadsword' or \
+                   (jf_config.TOOL_GLYPH_ID and O.get_category(objs[0]) == nh.TOOL_CLASS) or \
                    all(map(lambda i: sorted(O.possibilities_from_glyph(i + nh.GLYPH_OBJ_OFF)) == objs, appearance_ids)), \
                 name
 

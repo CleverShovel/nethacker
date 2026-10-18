@@ -20,7 +20,7 @@ import re
 
 import nle.nethack as nh
 
-from . import jf_config
+from . import jf_config, tele_route
 from . import objects as O
 from .item import Item, flatten_items
 
@@ -41,6 +41,7 @@ MB_AMULET = O.from_name('amulet of magical breathing')
 LS_AMULET = O.from_name('amulet of life saving')
 STRANGLE_AMULET = O.from_name('amulet of strangulation')
 SCARE = O.from_name('scare monster', nh.SCROLL_CLASS)
+POLY_POTION = O.from_name('polymorph', nh.POTION_CLASS)
 UNLOCKERS = frozenset(O.from_name(n) for n in ('skeleton key', 'lock pick', 'credit card'))
 PASSAGE_BOOTS = frozenset((LEV_BOOTS, WW_BOOTS))
 
@@ -54,6 +55,22 @@ WISH_GDSM = 'blessed greased +2 gray dragon scale mail'
 WISH_LEV_RING = 'blessed ring of levitation'
 WISH_LS = 'blessed amulet of life saving'
 WISH_SPEED = 'blessed greased +2 speed boots'
+# wishes whose object has a random appearance (gray dragon scale mail is known on sight)
+WISH_OBJECTS = {WISH_LEV_RING: LEV_RING, WISH_LS: LS_AMULET, WISH_SPEED: SPEED_BOOTS}
+# WISH_TELEPORT_ROUTE (tele_route.py): a ring of teleport control and cursed scrolls of teleportation
+WISH_OBJECTS.update({tele_route.WISH_TC_RING: tele_route.TC_RING, tele_route.WISH_TELE_SCROLLS: tele_route.TELE_SCROLL,
+                     tele_route.WISH_CHARGING: tele_route.CHARGING_SCROLL})
+# ROUTE_GLOVES_FIX: only ever asked for with the flag on (tele_route.route_wish), so the entry is inert otherwise
+WISH_OBJECTS[tele_route.WISH_REMOVE_CURSE] = tele_route.REMOVE_CURSE
+# WISH_SINGLE (wish_source.single_wish): a single wish for polymorph control -- named by its appearance after the wish
+# (WISH_LEARN) like the other wished rings; inert unless that text is ever asked for
+WISH_OBJECTS['blessed ring of polymorph control'] = O.from_name('polymorph control', nh.RING_CLASS)
+WISH_OBJECTS['blessed amulet of magical breathing'] = MB_AMULET
+# WISH_SINGLE_V2 (wish_source.single_wish_v2): a wished tonal instrument shows as 'a horn' / 'a flute'; naming it by the wish
+# (WISH_LEARN, like the rings) makes it an exact tooled horn / magic flute for mino_guard's scare logic and the crusher. Inert
+# unless that text is ever asked for.
+for _tool in ('tooled horn', 'magic flute', 'frost horn', 'fire horn', 'magic harp'):
+    WISH_OBJECTS[_tool] = O.from_name(_tool)
 
 
 def _prob(obj):
@@ -128,7 +145,11 @@ def passage_plan(agent, tested=()):
     Items whose glyphs[0] is in `tested` are skipped. Only top-level inventory items (they have letters).
     """
     tested = set(tested)
-    items = [i for i in agent.inventory.items if i.glyphs[0] not in tested and i.category != nh.COIN_CLASS]
+    # a tested item that turned out to be a passage item (a ring of levitation taken off for a rest stop) is still
+    # one: `tested` only removes the unknown ones already tried (pwc-dp5 jf16-s13 gave up with its lev ring)
+    certain_kinds = (LEV_RING, LEV_BOOTS, WW_BOOTS, LEV_POTION, COLD_WAND, FROST_HORN, WISH_WAND)
+    items = [i for i in agent.inventory.items if i.category != nh.COIN_CLASS and
+             (i.glyphs[0] not in tested or (i.is_unambiguous() and i.object in certain_kinds))]
     engraved = agent.inventory.item_manager._already_engraved_glyphs
     plan = []
 
@@ -170,6 +191,11 @@ def passage_plan(agent, tested=()):
         if it.category == nh.TOOL_CLASS and not it.is_unambiguous() and FROST_HORN in it.objs:
             plan.append(('apply', it, f'unknown horn: P(frost)={p_of(it, {FROST_HORN}):.2f} '
                                       f'P(fire)={p_of(it, {FIRE_HORN}):.2f} (a fire ray may bounce back)'))
+    if jf_config.CASTLE_POLY:
+        # a known potion of polymorph: a random form flies, swims or breathes water 20% of the time (castle_power)
+        for it in items:
+            if _certain(it, POLY_POTION):
+                plan.append(('quaff', it, 'potion of polymorph: P(crossing form)=0.20'))
     potions = [i for i in items if i.category == nh.POTION_CLASS and not i.is_unambiguous() and LEV_POTION in i.objs]
     for it in sorted(potions, key=lambda i: (-p_of(i, {LEV_POTION}), _danger(i, _POTION_DANGER), -i.count)):
         plan.append(('quaff', it, f'unknown potion: P(levitation)={p_of(it, {LEV_POTION}):.2f} '
@@ -233,11 +259,79 @@ def has_object(agent, obj):
     return any(_certain(i, obj) for i in flatten_items(agent.inventory.items))
 
 
+_WISH_GOT = re.compile(r'(?:^|\s)([a-zA-Z]) - ((?:an?|\d+) [^.]+?)\.(?=\s|$)')
+
+
+def note_wish(agent, text):
+    """WISH_LEARN: the wish prompt was answered with `text` (agent.update); learn_wished names the result."""
+    tele_route.note_asked(agent, text)
+    if jf_config.WISH_PRAYER_HOLD:
+        agent._wish_timeout = (agent.wish_prayer_timeout() + 100, agent.blstats.time)
+    if jf_config.WISH_LEARN:
+        agent._wish_pending = (WISH_OBJECTS.get(text), text, agent.step_count)
+
+
+def learn_wished(agent):
+    """WISH_LEARN, at the end of agent.update: 'p - a granite ring.' after a wish for a ring of levitation.
+    makewish leaves the object unidentified; record its appearance glyph as the wished type so the bot uses it
+    (castle_logic's certain ring, inventory.wear_life_saving) and wish_text moves on to the next wish."""
+    pend = getattr(agent, '_wish_pending', None)
+    if pend is None:
+        return
+    obj, text, step = pend
+    msg = agent.message or ''
+    tail = msg.rsplit(text, 1)[-1] if text in msg else msg
+    m = _WISH_GOT.search(tail)
+    if m is None:
+        if agent.step_count - step > 30:
+            agent._wish_pending = None
+        return
+    agent._wish_pending = None
+    if obj is None:
+        return
+    letter = m.group(1)
+    tele_route.note_wished(agent, text, letter)
+    if jf_config.T_ROUTE_FIRE and agent.character.prop.hallu:
+        return   # (the inventory glyphs are random while hallucinating: a mapping learned from one would be a wrong one)
+    obs = agent.last_observation
+    glyph = next((int(g) for l, g in zip(obs['inv_letters'], obs['inv_glyphs']) if chr(l) == letter), None)
+    im = agent.inventory.item_manager
+    if glyph is None or not nh.glyph_is_normal_object(glyph) or glyph in im.glyph_to_object or \
+            obj in im.object_to_glyph:
+        return
+    if obj not in O.possibilities_from_glyph(glyph):
+        agent.log(f'POWER wish {text!r} gave {m.group(2)!r}: not a {obj.name}')
+        return
+    im.glyph_to_object[glyph] = obj
+    im.object_to_glyph[obj] = glyph
+    agent.inventory.items._previous_inv_strs = None   # re-parse the inventory with the new name
+    agent.log(f'POWER wished {obj.name}: {letter} - {m.group(2)}')
+
+
+_SINGLE_SOURCE = ('grants you a wish', 'I will grant one wish', 'You sit on the opulent throne')
+
+
+def _single_source_message(agent):
+    """WISH_SINGLE: the wish prompt comes from a water demon (dowaterdemon), a djinni or a throne that nobody here knows about
+    (no wand of wishing used just now)."""
+    msg = agent.message or ''
+    return any(s in msg for s in _SINGLE_SOURCE) and not tele_route._wand_source(agent)
+
+
 def wish_text(agent, purpose=None):
     """The next wish. GDSM first (magic resistance and AC for reaching the Castle), then life saving (worn at
     once: the dive's next death is survived; only ~19% of games reach the Castle, where a passage wish pays
     +0.045), then the Castle passage (a ring of levitation can be taken off to drop through the trap door),
     then speed boots. For purpose='passage' (castle_logic zapping at the moat) the ring comes first."""
+    if jf_config.WISH_SINGLE and (purpose == 'single' or (purpose is None and _single_source_message(agent))):
+        # a throne's or a lamp's wish (wish_source sets the purpose), or a water demon's (the message says so): no wand
+        # behind it, so no route -- chosen from the kit
+        from . import wish_source
+        return wish_source.single_wish(agent)
+    # WISH_TELEPORT_ROUTE first, even at the moat: two controlled level teleports beat one crossing (tele_route.py)
+    route = tele_route.route_wish(agent)
+    if route is not None:
+        return route
     if purpose == 'passage' and not has_object(agent, LEV_RING):
         return WISH_LEV_RING
     if not any(i.is_armor() and i.is_unambiguous() and 'dragon scale' in i.object.name
@@ -289,16 +383,22 @@ def scare_scrolls(agent):
 
 
 _DUST_CALL = re.compile(r'Call an? scrolls? labeled ([A-Z0-9 ]+?):\s*$')
+_LAUGH = ('You hear maniacal laughter', 'You hear sad wailing')
 
 
 def note_dust_prompt(agent):
     """'The scroll turns to dust as you pick it up.' followed by 'Call a scroll labeled X:' names the label
-    of scare monster in this game (pickup.c docall). Remember it."""
+    of scare monster in this game (pickup.c docall). Remember it. SCARE_READ_ID: so does a read whose message is
+    'You hear maniacal laughter' / 'You hear sad wailing' (read.c SCR_SCARE_MONSTER: not auto-identified, docall)."""
     m = _DUST_CALL.search(agent.single_message)
-    if m is None or 'to dust as you' not in agent.message:
+    if m is None:
+        return
+    if 'to dust as you' not in agent.message and \
+            not (jf_config.SCARE_READ_ID and any(s in agent.message for s in _LAUGH)):
         return
     labels = agent.inventory.scare_labels
     label = m.group(1).strip()
     if label not in labels:
         labels.add(label)
-        agent.log(f'POWER scare monster is labeled {label!r} (a scroll turned to dust on pickup)')
+        how = 'a scroll turned to dust on pickup' if 'to dust as you' in agent.message else 'read: maniacal laughter'
+        agent.log(f'POWER scare monster is labeled {label!r} ({how})')

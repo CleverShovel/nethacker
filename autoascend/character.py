@@ -285,6 +285,34 @@ class Character:
         # dying only rehumanizes us (polyself.c rehumanize) back to this HP (LYCAN_FIXES)
         self.hp_before_poly = None
         self._was_polymorphed = False
+        # intrinsics from corpses (eat.c cpostfx), attrcurse takes them away: read by jf_config.SHOP_GUARD
+        self.teleportitis = False
+        self.teleport_control = False
+        # intrinsic telepathy from a floating eye corpse (eat.c cpostfx), lost to sit.c attrcurse: read by
+        # jf_config.FEYE_TELE (an extrinsic source -- helm of telepathy, amulet of ESP -- prints nothing and is not seen)
+        self.telepathic = False
+
+    def _track_telepathy(self, msg):
+        # eat.c cpostfx TELEPAT: 'You feel a strange mental acuity.' ('in touch with the cosmos.' hallucinating);
+        # sit.c attrcurse takes it away with 'Your senses fail!'
+        if 'You feel a strange mental acuity' in msg or 'You feel in touch with the cosmos' in msg:
+            if not self.telepathic:
+                self.agent.log('INTRINSIC telepathy')
+            self.telepathic = True
+        if 'Your senses fail' in msg:
+            self.telepathic = False
+
+    def _track_teleport(self, msg):
+        # eat.c cpostfx: 'You feel very jumpy.' (hallucinating: 'diffuse.') gives teleportitis, 'You feel in control
+        # of yourself.' ('centered in your personal space.') teleport control; sit.c attrcurse: 'You feel less jumpy.'
+        if 'You feel very jumpy' in msg or 'You feel diffuse' in msg:
+            if not self.teleportitis:
+                self.agent.log('INTRINSIC teleportitis')
+            self.teleportitis = True
+        if 'You feel less jumpy' in msg:
+            self.teleportitis = False
+        if 'You feel in control of yourself' in msg or 'centered in your personal space' in msg:
+            self.teleport_control = True
 
     _WERE_KIND = re.compile(r'\bwere(rat|jackal|wolf)\b')
     _TURN_INTO_WERE = re.compile(r'You turn into an? were(rat|jackal|wolf)!')
@@ -296,6 +324,8 @@ class Character:
                 self.is_lycanthrope = True
             if 'You feel purified.' in self.agent.message:
                 self.is_lycanthrope = False
+            self._track_teleport(self.agent.message)
+            self._track_telepathy(self.agent.message)
             return
         # every message since the last update: infections and changes happen inside atomic operations
         # (fights, searches), and the old check of the last message alone missed some of them
@@ -305,6 +335,8 @@ class Character:
             start = 0
         self._history_seen = len(history)
         msg = ' '.join(history[start:] + [self.agent.message])
+        self._track_teleport(msg)
+        self._track_telepathy(msg)
         # infected while fainted or asleep the message is 'You dream that you feel feverish.' (75 of 591
         # infections in the dev runs): the old exact match never saw it, so no cure prayer came and the
         # bot went on eating jackal corpses (jf25 s10: 'You cannibal!', Luck -2..-5, next prayer failed)
@@ -335,10 +367,16 @@ class Character:
             # the last HP seen before the change (this step already shows the new form's HP)
             self.hp_before_poly = getattr(self, '_last_normal_hp', None)
             self.agent.log(f'POLY changed form; HP before: {self.hp_before_poly} now {bl.hitpoints}/{bl.max_hitpoints}')
+            if jf_config.LYCAN_GEAR:
+                from . import lycan_gear
+                lycan_gear.note_change(self.agent, 'form change')
         if not polymorphed:
             bl = self.agent.blstats
             self._last_normal_hp = (bl.hitpoints, bl.max_hitpoints)
             self.hp_before_poly = None
+            if self._was_polymorphed and jf_config.LYCAN_GEAR:
+                from . import lycan_gear
+                lycan_gear.note_return(self.agent)
         self._was_polymorphed = polymorphed
 
     def were_family(self):
@@ -367,7 +405,10 @@ class Character:
         cap = min(1000, (self.agent.blstats.strength_percentage + self.agent.blstats.constitution) * 25 + 50)
         # UNSQUEEZE: boxed in by diagonal squeezes (hack.c cant_squeeze_thru: > 600 carried), keep under 600
         if self.agent.blstats.time < getattr(self.agent, '_squeeze_cap_until', -1):
-            cap = min(cap, 550)
+            from . import jf_config
+            # SQUEEZE_KEEP: Item.unit_weight takes the heaviest candidate object, so the estimate never undershoots
+            # hack.c's 600; 550 left ~10 for the wands once the weapon, armour and tool were in (cmp-main jf41 s13)
+            cap = min(cap, jf_config.SQUEEZE_KEEP_CAP if jf_config.SQUEEZE_KEEP else 550)
         return cap
 
     def parse(self):
@@ -411,11 +452,9 @@ class Character:
     def parse_spellcast_view(self):
         self.known_spells = dict()
         self.spell_fail_chance = dict()
-        self.spell_level = dict()
-        self.spell_retention = dict()
 
         # TODO: parse for other spellcaster classes
-        if self.role not in (self.HEALER, self.WIZARD, self.PRIEST, self.MONK):
+        if self.role not in (self.HEALER,):
             return
 
         with self.agent.atom_operation():
@@ -433,14 +472,11 @@ class Character:
                                      r'(' + '|'.join(ALL_SPELL_CATEGORIES) + ') *' +
                                      r'([0-9]*)\% *' +
                                      r'([0-9]*\%|\(gone\))', line)
-                if len(matches) != 1:
-                    continue
+                assert len(matches) == 1, (matches, line)
                 letter, spell_name, level, category, fail, retention = matches[0]
                 assert len(letter) == 1, letter
                 self.known_spells[spell_name] = letter
                 self.spell_fail_chance[spell_name] = int(fail) / 100
-                self.spell_level[spell_name] = int(level or 0)
-                self.spell_retention[spell_name] = 0 if '(gone)' in retention else int(retention.rstrip('%') or 0)
         self.agent.step(A.Command.ESC)
 
     def parse_enhance_view(self):
@@ -469,7 +505,9 @@ class Character:
         return next(iter(self.upgradable_skills.keys()))
 
     def _parse_enhance_view(self):
-        if self.agent.popup[0] not in ('Current skills:', 'Pick a skill to advance:'):
+        # an empty popup (seen once: a garbled zap-direction prompt in a dying game, cand-l2 gate jf916 s6) raised
+        # IndexError here; treat it like any other unexpected view
+        if not self.agent.popup or self.agent.popup[0] not in ('Current skills:', 'Pick a skill to advance:'):
             raise ValueError('Invalid ehance popup text format.' + str(self.agent.popup))
         self.upgradable_skills = dict()
         for line in self.agent.popup[1:]:

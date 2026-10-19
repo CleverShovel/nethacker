@@ -24,6 +24,16 @@ SPORE_MIN_DIST = 0
 SHOP_GUARD_DIST = 10
 CAST_PET_PENALTY = 40
 CAST_PEACEFUL_PENALTY = 200
+# hypothesis: most early Wizard deaths are not one 'dangerous' monster but an ordinary pack (rothe, hill
+# orcs, jackals, dwarves, gnome lords, rats) converging at once -- none individually flagged dangerous by
+# is_dangerous_monster, so CAST_MODE='threat' withholds force bolt from them until hp_ratio already fell
+# below CAST_THREAT_HP_RATIO, which the data says is often within a few turns of death. Thin the pack with
+# force bolt as soon as 2+ ordinary (non-weak, non-passive) hostiles are within PACK_THREAT_DIST, before HP
+# drops, instead of only reacting once already hurt. Narrower than the already-tried 'cast at every threat'
+# (that spent Pw against lone/weak encounters too): this only fires once a real multi-attacker threat exists.
+PACK_THREAT_ENABLE = True
+PACK_THREAT_MIN_COUNT = 2
+PACK_THREAT_DIST = 3
 
 # roles whose spell menu is read (Character role names, upper case)
 PARSE_ROLES = ('WIZARD', 'PRIEST', 'MONK')

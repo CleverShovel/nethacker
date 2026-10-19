@@ -2,6 +2,7 @@ from collections import defaultdict
 from itertools import product
 
 import numpy as np
+from .. import spell_magic as _spell_magic
 from scipy import signal
 
 from ..glyph import G, MON
@@ -359,7 +360,6 @@ def elbereth_action(agent, monsters):
     if not agent.can_engrave():
         return []
     adj_monsters_count = 0
-    adjacent_vulnerable = 0
     dive = agent.global_logic.dive
     for monster in monsters:
         _, my, mx, mon, _ = monster
@@ -376,26 +376,12 @@ def elbereth_action(agent, monsters):
             adj_monsters_count += 0.1 * multiplier
             continue
         adj_monsters_count += 1 * multiplier
-        adjacent_vulnerable += 1
         if is_dangerous_monster(monster):
             adj_monsters_count += 2 * multiplier
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        priority = -15 + 20 * adj_monsters_count * (1 - player_hp_ratio)
-        # hypothesis: tou-hum-neu-fem's worst early deaths (s4/6/8 wererat-spawned rat swarms, s10
-        # rothe+imp+giant ant, s12 pony+rabid rat, s13 a hill-orc/rothe/bat/iguana/dwarf/dog parade) are
-        # 3+ ordinary monsters landing adjacent at once. Individually each clears is_dangerous_monster's
-        # HP<=10 retreat bar, and melee_monster_priority ties them near equal (~16), so fight2 just swings
-        # at whichever one the loop reaches while the others keep attacking every turn. The crowd weight
-        # above already grows with adj_monsters_count, but at moderate HP (<30, ratio ~0.5-0.7) it still
-        # rarely clears melee's flat ~16, so the bot fights through the pile-on instead of neutralizing
-        # it. When 3+ Elbereth-vulnerable hostiles are adjacent at once (a real surround, not just one
-        # tough target), force Elbereth above melee so one turn removes the whole crowd's attacks instead
-        # of whittling down one monster while the rest keep swinging.
-        if adjacent_vulnerable >= 3:
-            priority = max(priority, 25)
-        return [(priority, ('elbereth',))]
+        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth',))]
     return []
 
 
@@ -447,6 +433,8 @@ def get_available_actions(agent, monsters):
                 actions.append((pri, ('ranged', dy, dx)))
 
             actions.extend(get_potential_wand_usages(agent, monsters, dy, dx))
+            actions.extend(_spell_magic.get_potential_spell_usages(agent, monsters, dy, dx))
+            actions.extend(_spell_magic.get_potential_ray_usages(agent, monsters, dy, dx))
 
     to_pickup = decide_what_to_pickup(agent)
     if to_pickup:

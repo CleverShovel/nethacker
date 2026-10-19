@@ -33,7 +33,7 @@ from scipy import ndimage
 
 from . import objects as O
 
-from . import jf_config, jf_log, power, sq_load, surv_gate, utils, valley, valley_walk, wish_source
+from . import jf_config, jf_log, power, sq_load, surv_gate, surv_threat, utils, valley, valley_walk, wish_source
 from .castle_logic import CastlePassage
 from .character import Character
 from .exceptions import AgentPanic
@@ -95,6 +95,9 @@ RETREAT_MAX_DISTANCE = 12
 AVOID_NAMES = ('jackal', 'rothe', 'dwarf')
 AVOID_BELOW = 0.75
 AVOID_RADIUS = 4
+# expected melee damage per player turn (attack dice * hit chance against our AC * relative speed) from the
+# hostiles within AVOID_RADIUS that trips the same proactive defense as AVOID_NAMES -- see _avoid_near / _monster_dps
+AVOID_DPS = 2.0
 ARRIVAL_WATCH_TURNS = 30       # how long after arriving a crowd still sends us back up
 # ...or when this fraction of max HP was lost within RETREAT_WINDOW turns
 RETREAT_FAST_LOSS = 0.3
@@ -2458,12 +2461,40 @@ class DiveLogic:
         self._max_wet_cache = (turn, key, max_wet)
         return max_wet
 
+    def _monster_dps(self, m):
+        """Expected melee damage per player turn: attack_damage's per-round dice times our hit_chance
+        against it (current AC, its level, not helpless) times its speed relative to ours (surv_threat,
+        already used for the hunger-prayer threat model -- reused here for the same reason)."""
+        name = getattr(m[3], 'mname', '')
+        per_round, level, speed = surv_threat.attack_damage(name, getattr(m[3], 'difficulty', None))
+        if per_round <= 0:
+            return 0.0
+        speed = getattr(m[3], 'mmove', speed) or speed
+        bl = self.agent.blstats
+        hc = surv_threat.hit_chance(int(bl.armor_class), level, helpless=False)
+        return per_round * hc * (speed / 12.0)
+
     def _avoid_near(self):
-        """Wizards only: a hostile of AVOID_NAMES within AVOID_RADIUS squares."""
+        """Wizards only: a hostile of AVOID_NAMES within AVOID_RADIUS squares, or any set of nearby hostiles
+        whose combined _monster_dps reaches AVOID_DPS.
+        hypothesis: the Wizard's top killers (prompt data: rothe, hill orc, jackal, giant ant, dwarf, gnome
+        lord, rat; eval data here also shows gnome king, wererat, werejackal) are mostly NOT in the 3-name
+        AVOID_NAMES list, so a hill orc, a gnome lord/king, a giant-ant swarm or a pack of jackals gets no
+        proactive defense at all -- the bot only reacts once HP is already low, which the prompt's own timing
+        data says is too late (death within 1-5 turns of crossing a low-HP line). A damage-based gate (dice *
+        hit chance * speed, the same model already trusted for the hunger-prayer threat check) catches any
+        single heavy hitter or pack generally, without hand-listing every dangerous species, so it should
+        also hold up on seeds beyond the training set."""
         try:
             if self.agent.character.role != self.agent.character.WIZARD:
                 return []
-            return [m for m in self._near_hostiles(radius=AVOID_RADIUS) if getattr(m[3], "mname", "") in AVOID_NAMES]
+            near = self._near_hostiles(radius=AVOID_RADIUS)
+            named = [m for m in near if getattr(m[3], "mname", "") in AVOID_NAMES]
+            if named:
+                return named
+            if near and sum(self._monster_dps(m) for m in near) >= AVOID_DPS:
+                return near
+            return []
         except Exception:
             return []
 

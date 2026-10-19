@@ -505,13 +505,18 @@ def get_priorities(agent):
         draw_monster_priority_negative(agent, m, priority, walkable)
     priority[~walkable] = float('nan')
 
-    # TODO: figure out how to use corridors priority so that it improves the score
-    # if len([m for m in monsters if m[3].mname not in chain(ONLY_RANGED_SLOW_MONSTERS, WEAK_MONSTERS)]) >= 4:
-    #     priority += get_corridors_priority_map(walkable)
-    # for _, _, _, mon, _ in monsters:
-    #     if ord(mon.mlet) == MON.S_ANT:
-    #         priority += get_corridors_priority_map(walkable)
-    #         break
+    # hypothesis: the Wizard's fast, low-HP deaths (median 10 turns from 50% HP, 2 from 25%; a single
+    # record often costs 25% of max HP in one turn) mostly come from several ordinary attackers reaching
+    # us together in an open room (rothe, hill orcs, jackals, giant ants, dwarves, gnome lords -- a pack
+    # piling on, not one monster dominating). A 1-wide corridor square has only 1-2 open neighbours, so an
+    # attacker pack standing there can land at most that many hits a turn instead of surrounding us. This
+    # only biases which open square we move to when several real (non-weak, non-passive) threats are
+    # already close, so a lone or weak monster is unaffected and we still fight exactly as before.
+    if jf_config.CORRIDOR_FIGHT:
+        swarm = [m for m in monsters if m[0] <= jf_config.CORRIDOR_FIGHT_RADIUS and
+                 m[3].mname not in WEAK_MONSTERS and m[3].mname not in ONLY_RANGED_SLOW_MONSTERS]
+        if len(swarm) >= jf_config.CORRIDOR_FIGHT_MIN_COUNT:
+            priority += jf_config.CORRIDOR_FIGHT_WEIGHT * get_corridors_priority_map(walkable)
 
     # use relative priority to te current position
     priority -= priority[agent.blstats.y, agent.blstats.x]

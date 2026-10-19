@@ -3798,6 +3798,15 @@ SAFE_GRIND_PRAYER_ALL = False
 # decodes the same (dev/safegrind/test_decode.py; the games' message logs are byte-identical with the flag on), off, decode() is the strict default as before.
 DECODE_REPLACE = True
 
+# CORRIDOR_FIGHT (combat/fight_heur.get_priorities): bias the adjacent-move choice toward 1-wide corridor
+# squares once CORRIDOR_FIGHT_MIN_COUNT or more real (non-weak, non-passive) hostiles are within
+# CORRIDOR_FIGHT_RADIUS walking squares, so a pack of attackers can reach us from at most 1-2 sides
+# instead of surrounding us in the open. See the hypothesis comment at its call site.
+CORRIDOR_FIGHT = True
+CORRIDOR_FIGHT_MIN_COUNT = 3
+CORRIDOR_FIGHT_RADIUS = 6
+CORRIDOR_FIGHT_WEIGHT = 2.0
+
 _raw = os.environ.get('JF_CFG')
 if _raw:
     for _name, _value in json.loads(_raw).items():

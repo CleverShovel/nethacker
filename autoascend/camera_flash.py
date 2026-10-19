@@ -17,7 +17,6 @@ from . import jf_config
 from . import opp_items
 
 CAM_HP = 0.5
-CAM_MIN_DIFF = 2
 CAM_STRONG_DIFF = 4
 CAM_STRONG_HP = 0.85
 CAM_CROWD_HP = 0.7
@@ -87,10 +86,17 @@ def choose(agent):
                 continue
             diff = getattr(mon, 'difficulty', 0) or 0
             hpr = bl.hitpoints / max(bl.max_hitpoints, 1)
-            # only a real threat: hurt (below CAM_HP) with a monster that is not trivial, or a strong monster (rothe, hill orc,
-            # giant ant, homunculus ...) next to us while below CAM_STRONG_HP, or three hostiles at once while below CAM_CROWD_HP
-            if not ((hpr < CAM_HP and diff >= CAM_MIN_DIFF) or (diff >= CAM_STRONG_DIFF and n == 1 and hpr < CAM_STRONG_HP) or
-                    (len(near) >= 3 and hpr < CAM_CROWD_HP and diff >= CAM_MIN_DIFF)):
+            # hypothesis: the real early-Tourist killers (bat, sewer rat, kitten, little dog, jackal) carry a
+            # monst.c "difficulty" of 1 or less, so the old "diff >= 2" guard on the hurt/crowd branches kept
+            # the flash holstered in exactly the fatal crises (camera_flash.py's own ledger: 28 of 32 fatal
+            # early Tourist crises had the camera in the pack, 0 flashes) -- a Tourist's AC/HP make any
+            # adjacent hostile dangerous once hurt, regardless of how threatening that monster is to an
+            # average hero. Blinding+fleeing a trivial monster at <50% HP is still a net win (it buys turns
+            # to heal/retreat), so the difficulty filter is dropped from the hurt and crowd branches; it
+            # stays for the "strong monster, still near full HP" branch so the camera isn't fired
+            # pre-emptively at trash.
+            if not (hpr < CAM_HP or (diff >= CAM_STRONG_DIFF and n == 1 and hpr < CAM_STRONG_HP) or
+                    (len(near) >= 3 and hpr < CAM_CROWD_HP)):
                 continue
             cands.append(((-diff, n), m, _DIRS[(sy, sx)], name))
         if not cands:

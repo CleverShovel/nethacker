@@ -2669,8 +2669,8 @@ SUPPLY_SCAN_TOWN_ONLY = False
 # is worn with its beatitude unknown (inventory.get_best_armorset), about one shelf piece in eight is cursed. Census of the 150 cand-l5
 # base games: body armour on a shelf in 60 games (leather armor 5-7 zm, studded leather 15-20, scale mail 45-60), gloves in 10 (leather
 # gloves 8-11), boots 17, helm 12, shield 9; 14 of 63 castle arrivals wore no body armour and 62 of 63 no gloves.
-SUPPLY_ARMOR = True
-SUPPLY_ARMOR_MAX = 120
+SUPPLY_ARMOR = False
+SUPPLY_ARMOR_MAX = 60
 # PREEMPT_TRACE (dev tool, off; preempt_trace.py): log "PTRACE ..." for every step / atom block whose end-of-block preempt checks raised
 # (which helper's tail was skipped: the bug class of F362), true or a dict {"fuzz": {"owner": [...], "p", "skip", "max", "seed"}} that
 # also fires a harmless preemption at the exit of the named helpers. Logging only without "fuzz"; no game RNG is drawn either way.

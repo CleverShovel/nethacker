@@ -153,7 +153,7 @@ class ExplorationLogic:
 
         go_to_strategy(y, x).run()
         assert (self.agent.blstats.y, self.agent.blstats.x) == (y, x)
-        while self.agent.has_pet:
+        while self.agent.stair_pet_wait():
             if utils.any_in(self.agent.glyphs[max(self.agent.blstats.y - 1, 0) : self.agent.blstats.y + 2,
                                               max(self.agent.blstats.x - 1, 0) : self.agent.blstats.x + 2],
                             G.PETS):
@@ -169,7 +169,7 @@ class ExplorationLogic:
         for (y, x), _, dir in path:
             go_to_strategy(y, x).run()
             assert (self.agent.blstats.y, self.agent.blstats.x) == (y, x)
-            while self.agent.has_pet:
+            while self.agent.stair_pet_wait():
                 if utils.any_in(self.agent.glyphs[max(self.agent.blstats.y - 1, 0) : self.agent.blstats.y + 2,
                                                 max(self.agent.blstats.x - 1, 0) : self.agent.blstats.x + 2],
                                 G.PETS):

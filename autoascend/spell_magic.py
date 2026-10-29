@@ -112,23 +112,6 @@ def _retained(ch, spell):
     return getattr(ch, 'spell_retention', {}).get(spell, 100) > 0
 
 
-def _pack_threat(fh, monsters):
-    """True when PACK_THREAT_MIN_COUNT or more ordinary hostiles (not weak, not passive-ranged-only) are
-    within PACK_THREAT_DIST walking squares: a pack closing in together, the common shape of the Wizard's
-    fast low-HP deaths (see spell_config.PACK_THREAT_ENABLE)."""
-    count = 0
-    for m in monsters:
-        dist, _, _, mon, _ = m
-        if dist > cfg.PACK_THREAT_DIST:
-            continue
-        if mon.mname in fh.WEAK_MONSTERS or mon.mname in fh.ONLY_RANGED_SLOW_MONSTERS:
-            continue
-        count += 1
-        if count >= cfg.PACK_THREAT_MIN_COUNT:
-            return True
-    return False
-
-
 def get_potential_spell_usages(agent, monsters, dy, dx):
     """[(priority, ('cast', dy, dx, spell, targets))] for the direction (dy, dx), like get_potential_wand_usages."""
     if not cfg.CAST_FORCE_BOLT:
@@ -166,8 +149,7 @@ def get_potential_spell_usages(agent, monsters, dy, dx):
     if mon.mname in fh.WEAK_MONSTERS and hp_ratio > cfg.CAST_WEAK_HP_RATIO:
         return []
     dangerous = fh.is_dangerous_monster(monster)
-    pack = cfg.PACK_THREAT_ENABLE and _pack_threat(fh, monsters)
-    if cfg.CAST_MODE == 'threat' and not (dangerous or pack or hp_ratio < cfg.CAST_THREAT_HP_RATIO):
+    if cfg.CAST_MODE == 'threat' and not (dangerous or hp_ratio < cfg.CAST_THREAT_HP_RATIO):
         return []
     priority = cfg.CAST_BASE + (cfg.CAST_DANGEROUS_BONUS if dangerous else 0) + cfg.CAST_LOWHP_BONUS * (1 - hp_ratio)
     priority -= cfg.CAST_DISTANCE_PENALTY * (dist - 1)

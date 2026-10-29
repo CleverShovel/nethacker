@@ -8,6 +8,7 @@ from . import objects as O
 from . import soko_solver
 from . import utils
 from . import jf_config
+from . import scout
 from . import power
 from . import castle_power
 from . import castle_cross
@@ -844,7 +845,7 @@ class GlobalLogic:
             return None
         xl = self.agent.blstats.experience_level
         keys = [k for k in table if k <= xl]
-        return table[max(keys)] if keys else 1
+        return scout.adjust_grind_level(self.agent, table[max(keys)] if keys else 1)
 
     def _tour_stalled(self):
         """The tour has kept within 8 squares of one spot on one level, same milestone, TOUR_STALL_TURNS turns."""
@@ -1111,6 +1112,7 @@ class GlobalLogic:
                 self.supply.sell().every(3).condition(lambda: jf_config.SUPPLY_SELL),
                 # SUPPLY_BUY: stand on every shelf square of the shop we are in, so the prices are known
                 self.supply.scan().condition(lambda: jf_config.SUPPLY_BUY),
+                scout.strategy(self.agent).every(3),
                 # INSTRUMENT_SHOP (instruments lane): look at, sell junk for and buy a shop's instrument -- before buy_food, whose
                 # rations would eat the gold (the list is in priority order: the first strategy whose condition holds preempts)
                 instruments.shop_strategy(self.agent).every(2).condition(lambda: jf_config.INSTRUMENT_SHOP),

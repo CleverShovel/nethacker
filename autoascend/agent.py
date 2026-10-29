@@ -141,6 +141,22 @@ class Agent:
                     f'hp{bl.hitpoints}/{bl.max_hitpoints}' if bl is not None else 't?'
             jf_log.log(f'[s{self.step_count} {where}] {msg}')
 
+    def stair_pet_wait(self):
+        """spell_port/make_stairpet.py: True while the hero should keep waiting for the pet at the stairs."""
+        bl = self.blstats
+        st = self.__dict__.setdefault("_spw", {"t0": -10 ** 6, "last": -10 ** 6})
+        if bl.time - st["last"] > 5:
+            st["t0"] = bl.time
+        st["last"] = bl.time
+        waited = bl.time - st["t0"]
+        if bl.hunger_state >= Hunger.WEAK:
+            return False
+        if self.has_pet:
+            return waited < 100
+        if bl.time - self._last_pet_seen <= 600 and waited < 80 and not self.get_visible_monsters():
+            return True
+        return False
+
     @property
     def has_pet(self):
         return (self.blstats.time - self._last_pet_seen) <= 16
@@ -466,6 +482,8 @@ class Agent:
         if isinstance(action, str):
             assert len(action) == 1
             action = A.ACTIONS[A.ACTIONS.index(ord(action))]
+        from . import danger_trace as _dtrace
+        _dtrace.note_action(self, action)
         observation, reward, done, info = self.env.step(action)
         observation = {k: v.copy() for k, v in observation.items()}
         self.step_count += 1
@@ -482,6 +500,7 @@ class Agent:
                 self.stats_logger.log_gold(0)
 
         if done:
+            _dtrace.on_done(self, observation)
             raise AgentFinished()
 
         if jf_config.PREEMPT_TRACE:
@@ -664,6 +683,8 @@ class Agent:
 
         self.blstats = BLStats(*self.last_observation['blstats'])
         self.glyphs = self.last_observation['glyphs']
+        from . import danger_trace as _dtrace_u
+        _dtrace_u.on_update(self)
 
         if self._prayer_model_active():
             try:
@@ -2756,6 +2777,13 @@ class Agent:
                 # angry watchmen ('You murderer!' x4 = Luck -8, every later prayer failed) and starved;
                 # dive_logic.leave_minetown_hallucinating takes the stairs out instead
                 monsters = []
+            from . import pet_first as _pet_first
+            if _pet_first.wait_reason(self, monsters):
+                if not yielded:
+                    yielded = True
+                    yield True
+                self.search()
+                continue
             allow_attack_all = self._last_turn - self._allow_attack_all_turn < 3
             # a gelatinous cube close by keeps the fight on, to step out of its paralysing reach
             only_ranged_slow_monsters = all([monster[3].mname in combat.monster_utils.ONLY_RANGED_SLOW_MONSTERS
@@ -3703,11 +3731,11 @@ class Agent:
             self.pray()
             return
 
-        from . import camera_flash as _camera_flash
-        _cam_pick = _camera_flash.choose(self)
-        if _cam_pick is not None:
+        from . import rayguard as _rg
+        _rg_plan = _rg.plan(self)
+        if _rg_plan is not None:
             yield True
-            _camera_flash.do_flash(self, _cam_pick)
+            _rg.do(self, _rg_plan)
             return
 
         if jf_config.WELD_PRAY and self._weld_prayer_due():

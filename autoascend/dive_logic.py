@@ -92,9 +92,6 @@ FARM_TURNS = 0
 # retreat: below this HP fraction, with prayer/Elbereth unavailable, climb the up stairs if close
 RETREAT_BELOW = 0.35
 RETREAT_MAX_DISTANCE = 12
-AVOID_NAMES = ('jackal', 'rothe', 'dwarf')
-AVOID_BELOW = 0.75
-AVOID_RADIUS = 4
 ARRIVAL_WATCH_TURNS = 30       # how long after arriving a crowd still sends us back up
 # ...or when this fraction of max HP was lost within RETREAT_WINDOW turns
 RETREAT_FAST_LOSS = 0.3
@@ -2458,15 +2455,6 @@ class DiveLogic:
         self._max_wet_cache = (turn, key, max_wet)
         return max_wet
 
-    def _avoid_near(self):
-        """Wizards only: a hostile of AVOID_NAMES within AVOID_RADIUS squares."""
-        try:
-            if self.agent.character.role != self.agent.character.WIZARD:
-                return []
-            return [m for m in self._near_hostiles(radius=AVOID_RADIUS) if getattr(m[3], "mname", "") in AVOID_NAMES]
-        except Exception:
-            return []
-
     def _near_hostiles(self, radius=2):
         agent = self.agent
         y0, x0 = agent.blstats.y, agent.blstats.x
@@ -2494,8 +2482,7 @@ class DiveLogic:
             self._elbereth_resting = False
             yield False
         resting = self._elbereth_resting
-        _av = bool(self._avoid_near())
-        threshold = ELBERETH_REST_UNTIL if resting else (max(ELBERETH_REST_BELOW, AVOID_BELOW) if _av else ELBERETH_REST_BELOW)
+        threshold = ELBERETH_REST_UNTIL if resting else ELBERETH_REST_BELOW
         # a fast hitter (a leocrotta took a dive from 100 to 14 HP in 6 turns) can't be outrun: hide
         # behind Elbereth as soon as HP falls fast, not only below 40%
         falling = not resting and self._fast_hp_loss()
@@ -3068,8 +3055,7 @@ class DiveLogic:
         if jf_config.MEDUSA_NO_RETREAT and self._up_leads_to_medusa():
             yield False
         crowd = self._crowded_arrival()
-        _avoid = bool(self._avoid_near()) and bl.hitpoints < AVOID_BELOW * bl.max_hitpoints
-        in_trouble = bl.hitpoints < RETREAT_BELOW * bl.max_hitpoints or self._fast_hp_loss() or _avoid
+        in_trouble = bl.hitpoints < RETREAT_BELOW * bl.max_hitpoints or self._fast_hp_loss()
         if crowd is None and (RETREAT_BELOW <= 0 or not in_trouble or not self._near_hostiles(radius=3)):
             yield False
         if DIG_ESCAPE and crowd is None and self._dig_escape_action() is not None:
@@ -3087,7 +3073,7 @@ class DiveLogic:
         dis = agent.bfs()
         # fleeing across the level from a faster monster only hands it free hits: on fast HP loss
         # (without low HP) take the stairs only if they are a step or two away
-        reach = RETREAT_MAX_DISTANCE if (crowd is not None or bl.hitpoints < RETREAT_BELOW * bl.max_hitpoints or _avoid) else 2
+        reach = RETREAT_MAX_DISTANCE if (crowd is not None or bl.hitpoints < RETREAT_BELOW * bl.max_hitpoints) else 2
         if ARRIVAL_FIX and crowd is not None and bl.hitpoints >= RETREAT_BELOW * bl.max_hitpoints:
             # a crowd retreat only from (or next to) the '<' we came down: walking back to it through the
             # crowd is what kills (dive-safety, Medusa-3 harness: walking among the ravens)

@@ -15,7 +15,7 @@ from .glyph import G
 RAY_ALERT = 12
 STAIR_STEPS = 4
 STAIR_HP = 0.8
-MAX_STEPS = 10           # off-line steps per hit
+MAX_STEPS = 10# off-line steps per hit
 RANGE = 8
 RAY = re.compile(r"bolt of (fire|cold|lightning)|You are blinded by the flash|Your [a-z' -]+ (?:smoulders|freezes)")
 SESSILE = frozenset(('floating eye', 'lichen', 'brown mold', 'yellow mold', 'green mold', 'red mold', 'shrieker', 'violet fungus', 'blue jelly',

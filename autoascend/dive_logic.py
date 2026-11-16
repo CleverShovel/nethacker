@@ -2473,6 +2473,21 @@ class DiveLogic:
         return jf_config.RANGED_ON_ELB and \
             self.agent.blstats.time - self._ranged_hit_turn <= jf_config.RANGED_BREAK_TURNS
 
+    def _pel_window(self):
+        """PEL (spell_port/make_pel.py): within PEL_TURNS of an answered low-HP prayer, at Dlvl <= 4."""
+        agent = self.agent
+        pp = getattr(agent, "_postpray_turn", None)
+        return pp is not None and getattr(jf_config, "PEL_TURNS", 0) and agent.blstats.depth <= 4 and \
+            agent.blstats.time - pp < jf_config.PEL_TURNS
+
+    def _pel_dangerous(self, m):
+        """PEL: a monster whose expected melee over 3 turns is >= half our HP."""
+        from .surv_threat import attack_damage
+        mon = m[3]
+        per_round, _, speed = attack_damage(getattr(mon, "mname", ""), getattr(mon, "difficulty", None))
+        speed = getattr(mon, "mmove", speed) or speed
+        return per_round * speed / 12.0 * 3 >= self.agent.blstats.hitpoints / 2.0
+
     @Strategy.wrap
     @_hold_loop
     def elbereth_rest(self):
@@ -2483,6 +2498,11 @@ class DiveLogic:
             yield False
         resting = self._elbereth_resting
         threshold = ELBERETH_REST_UNTIL if resting else ELBERETH_REST_BELOW
+        pel = self._pel_window()
+        pel_extra = False   # PEL: a rest the base would not start
+        if pel and not resting and jf_config.PEL_REST_BELOW > threshold and \
+                ELBERETH_REST_BELOW * bl.max_hitpoints <= bl.hitpoints < jf_config.PEL_REST_BELOW * bl.max_hitpoints:
+            threshold, pel_extra = jf_config.PEL_REST_BELOW, True
         # a fast hitter (a leocrotta took a dive from 100 to 14 HP in 6 turns) can't be outrun: hide
         # behind Elbereth as soon as HP falls fast, not only below 40%
         falling = not resting and self._fast_hp_loss()
@@ -2501,8 +2521,12 @@ class DiveLogic:
             near, keep = self._sticky_rest_near(near)
         # a lone weak monster is better killed than hidden from (engraving gives it a free hit)
         if len(near) == 1 and getattr(near[0][3], 'mlevel', 99) <= 2 and bl.hitpoints >= 6:
-            self._elbereth_resting = False
-            yield False
+            if pel and (resting or self._pel_dangerous(near[0])):
+                # PEL: a dangerous lone weak monster with the prayer spent; a PEL rest in progress goes on
+                pel_extra = not resting
+            else:
+                self._elbereth_resting = False
+                yield False
         # REST_FIGHT_WEAK: ... at any HP when one blow kills it (makemon difficulty <= 2, not faster than us): the
         # engraving is a sure free attack and a dust typo (1 in 25 letters, 28% per word) another; our swing kills
         # ~3 times in 4. With HOLD_LOOP the rest really holds, and an XL2 at 5/20 HP died engraving twice next to a
@@ -2524,6 +2548,12 @@ class DiveLogic:
         if not self._elbereth_resting:
             self._rest_t0 = self._rest_seen = bl.time
             agent.log(f'ELBERETH rest start: {[m[3].mname for m in near]}')
+            if pel_extra:
+                try:
+                    agent._dlog_w(f"pel t={bl.time} hp={bl.hitpoints}/{bl.max_hitpoints} d={bl.depth} "
+                                  f"mon={','.join(m[3].mname.replace(' ', '_') for m in near)}")
+                except Exception:
+                    pass
         self._elbereth_resting = True
         self._hold_squares.add((agent.current_level().key(), bl.y, bl.x))
         if engraving != 'elbereth':

@@ -1780,6 +1780,8 @@ class Agent:
         self._pray_reason = None
         turn_before = self.blstats.time
         history_len = len(self._message_history)
+        _pp_low = self._critically_low_hp() or self.blstats.hitpoints * 3 <= self.blstats.max_hitpoints
+        _pp_hp, _pp_d = self.blstats.hitpoints, self.blstats.depth
         self.step(A.Command.PRAY)
         self.last_prayer_turn = self.blstats.time
         messages = ' '.join(self._message_history[history_len:] + [self.message])
@@ -1789,6 +1791,13 @@ class Agent:
         elif any(msg in messages for msg in self.PRAYER_SUCCESS_MESSAGES):
             self.prayer_failed = False  # pleased() only runs with the god appeased and Luck >= 0
             answered = True
+        # PEL (spell_port/make_pel.py): remember an answered low-HP prayer
+        if answered and _pp_low and getattr(jf_config, "PEL_TURNS", 0):
+            self._postpray_turn = self.blstats.time
+            try:
+                self._dlog_w(f"pp t={self.blstats.time} hp={_pp_hp} d={_pp_d}")
+            except Exception:
+                pass
         if limit is not None and self._prayer_model_active():
             try:
                 self.prayer_model.on_prayer(turn_before, messages, answered, failed, limit)

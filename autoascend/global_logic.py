@@ -830,6 +830,12 @@ class GlobalLogic:
             return False
         return True
 
+    def _grind_table(self):
+        """TOURIST_D1_GRIND (spell_port/make_td1.py): GRIND_LEVELS, read as {} (Dlvl-1 grind) for the Tourist."""
+        if getattr(jf_config, 'TOURIST_D1_GRIND', False) and self.agent.character.role == Character.TOURIST:
+            return {}
+        return jf_config.GRIND_LEVELS
+
     def _grind_level(self):
         """jf_config.GRIND_LEVELS {min XL: Dlvl}: the grind's main-dungeon level at this XL (None: the flag is off).
 
@@ -840,7 +846,7 @@ class GlobalLogic:
         turns and prayers, while killer bees, soldier ants and Uruk-hai (difficulty 5-6) stay out: the old
         Dlvl-3 grind at XL 7 (cap 5) lost 4.9-7.8% of games per 1000 turns. Dwarves (difficulty 4) spawn from
         XL 5 there, and the pet kills them for their pick-axes as it does on Dlvl 1 from XL 7."""
-        table = jf_config.GRIND_LEVELS
+        table = self._grind_table()
         if not table:
             return None
         xl = self.agent.blstats.experience_level
@@ -1021,7 +1027,7 @@ class GlobalLogic:
                 if jf_config.UPWARD_RETURN and self._pick_trip_done:
                     return True
                 cur = self.agent.current_level()
-                return bool(jf_config.GRIND_LEVELS) and lv[0] == Level.DUNGEONS_OF_DOOM and \
+                return bool(self._grind_table()) and lv[0] == Level.DUNGEONS_OF_DOOM and \
                     (cur.dungeon_number == Level.GNOMISH_MINES or self.agent.blstats.depth > lv[1])
             (
                 self.agent.exploration.go_to_level_strategy(*level, go_to_strategy, exploration_strategy(None))

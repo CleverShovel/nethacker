@@ -3829,3 +3829,6 @@ if EXCAL_PACKAGE:
     EXCAL_DEEP_DIST = 30
     EXCAL_CALM_RADIUS = 4
     EXCAL_ERRAND_WAIT = 300
+
+# TOURIST_D1_GRIND (spell_port/make_td1.py): the Tourist grinds on Dlvl 1 only (GRIND_LEVELS read as {} for it)
+TOURIST_D1_GRIND = True
